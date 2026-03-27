@@ -1,0 +1,17 @@
+﻿# Secrets - never commit these
+.env
+.env.*
+token.json
+credentials.json
+sync-log.json
+
+# Deno
+.deno/
+
+# VS Code
+.vscode/settings.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
