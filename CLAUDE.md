@@ -1,44 +1,33 @@
-﻿# Dave's Open Brain — Project Briefing
+﻿COMPLETED MIGRATIONS:
+- 001: extended projects table (description, category, location, started_at, target_date, updated_at)
+- 002: people table + project_people junction
+- 003: todos table (standalone, optional project_id/person_id)
+- 004: milestones table (standalone, optional project_id)
+- 005: orders project_id FK added
+- 006: 12 projects seeded from brain data
 
-## What this is
-Personal AI memory and project management system built on top of OB1 (Open Brain by Nate Jones).
-This repo contains Dave's private extensions — schema migrations, ingestion scripts, and Claude Code skills.
-OB1 MCP server is deployed separately to Supabase and treated as a read-only dependency.
-
-## Who Dave is
-Dave Rosner. Partner at Deloitte. IFR-rated pilot (Garmin GNS 650, ForeFlight). Serious woodworker/maker.
-Wine collector (320 bottles, 5-tier system). Angel Flight East volunteer pilot.
-Active projects: Ski House (Killington VT), Garbage Pi V2, Wine collection, AI Scaffolding, Aviation/Flying.
-
-## Stack
-- Supabase (Postgres + pgvector + Edge Functions) — hosted, not local
-- Deno (ingestion scripts in /scripts)
-- OpenRouter (embeddings: text-embedding-3-small, metadata: gpt-4o-mini)
-- OB1 MCP server (deployed to Supabase, do not modify source)
-- n8n (planned, self-hosted on VPS for Gmail watch and automation)
-
-## Existing Supabase tables
-- thoughts — core OB1 table (id, content, embedding, metadata jsonb, created_at, updated_at)
-- orders — purchase tracking (id, item_description, vendor, order_number, status, tracking_*, project text, category, thought_id, metadata jsonb)
-- projects — bare bones (id, name, status, budget, notes, metadata jsonb) — needs extension
+CURRENT SCHEMA (accurate):
+- thoughts: core OB1 table, unchanged
+- orders: full purchase tracking, project text + project_id FK
+- projects: 12 active projects seeded (Ski House, Garbage Pi V2, Primary Home, Pool House, Pool House Sofa, RAS Workbench, Boiler Controller, Metal Shop Buildout, AI Scaffolding, Home Assistant, Flying, Wine Collection)
+- people: empty, populate going forward
+- todos: empty, populate going forward  
+- milestones: empty, populate going forward
 - Views: open_orders, recent_deliveries, project_spend
 
-## Repo structure
-- /supabase/migrations/ — numbered SQL files, one per schema change, run in order
-- /supabase/views/ — view definitions source-controlled here
-- /scripts/ — Deno ingestion scripts (pull-gmail.ts, capture-orders.ts)
-- /claude-skills/ — Claude Code skill .md files
+DATA STRATEGY:
+- Thoughts (brain): project knowledge and context from Claude/ChatGPT migrations is already there and good. New project decisions and research captured going forward.
+- Orders/todos/milestones/people: all start fresh from now. No legacy migration needed. Dropbox documents are a future ingestion effort.
+- Gmail is source of truth for operational data (orders, shipping, tasks).
 
-## Rules
-- NEVER commit .env, token.json, credentials.json, sync-log.json
-- ALL schema changes go in /supabase/migrations/ as a numbered SQL file BEFORE running
-- Scripts use --dry-run flag for safe testing before live runs
-- Secrets live in Windows User environment variables, not in any file
+BUGS FIXED:
+- people serialization bug in pull-gmail.ts fixed (contacts now flat strings)
 
-## Current priorities
-1. Extend projects table (add category, description, target_date, started_at, location)
-2. Add people table (vendors, contractors, contacts)
-3. Add todos table (standalone, optional project_id FK)
-4. Add milestones table (standalone, optional project_id FK)
-5. Add project_id UUID FK to orders (alongside existing project text field)
-6. Fix [object Object] people serialization bug in pull-gmail.ts
+CURRENT PRIORITIES:
+1. Update CLAUDE.md (in progress)
+2. Fix Angel Flight East and other noise emails being ingested as thoughts in pull-gmail.ts
+3. Set up n8n on VPS for always-on Gmail watch
+4. Dropbox document ingestion (future)
+5. Claude Code weekly project review skill
+
+Keep the same structure and tone as the existing CLAUDE.md. Show me the new version before writing it.
