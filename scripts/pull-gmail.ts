@@ -850,7 +850,8 @@ async function main() {
         from, to,
         cc: cc || undefined,
         direction: "inbound",
-        contacts: [...parseEmailAddresses(from), ...parseEmailAddresses(to), ...parseEmailAddresses(cc)],
+        contacts: [...parseEmailAddresses(from), ...parseEmailAddresses(to), ...parseEmailAddresses(cc)]
+          .map(c => c.name ? `${c.name} <${c.email}>` : c.email),
         ...classification,
       };
       // Remove the raw order object from thought metadata (it goes in the orders table)
