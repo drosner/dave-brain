@@ -612,6 +612,27 @@ async function insertThought(
   return { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id };
 }
 
+// ─── Project Lookup ──────────────────────────────────────────────────────────
+
+async function lookupProjectId(projectName: string | null): Promise<string | null> {
+  if (!projectName) return null;
+  const res = await supabaseQuery(`/projects?name=ilike.${encodeURIComponent(projectName)}&select=id&limit=1`);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows.length > 0 ? rows[0].id : null;
+}
+
+// ─── People Upsert ───────────────────────────────────────────────────────────
+
+async function upsertPerson(name: string, email: string): Promise<void> {
+  if (!email) return;
+  await supabaseQuery("/people", {
+    method: "POST",
+    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+    body: JSON.stringify({ name: name || email, email, type: "contact" }),
+  });
+}
+
 // ─── Order Upsert ───────────────────────────────────────────────────────────
 
 interface OrderData {
@@ -685,6 +706,7 @@ async function upsertOrder(
     return { ok: true, id: existing.id, action: "updated" };
   }
 
+  const projectId = await lookupProjectId(order.project);
   const orderRow: Record<string, unknown> = {
     item_description: order.item_description, vendor: order.vendor,
     order_number: order.order_number, order_date: emailDate.split("T")[0],
@@ -693,7 +715,7 @@ async function upsertOrder(
     status: order.status || "ordered",
     tracking_number: order.tracking_number, tracking_carrier: order.tracking_carrier,
     tracking_url: order.tracking_url,
-    category: order.category || "personal", project: order.project,
+    category: order.category || "personal", project: order.project, project_id: projectId,
     source: "gmail", source_email_id: emailId,
     metadata: { items_list: order.items_list, email_history: [`${order.email_type}:${emailId}:${emailDate.split("T")[0]}`], last_email_type: order.email_type },
   };
@@ -865,6 +887,11 @@ async function main() {
         syncLog.ingested_ids[ref.id] = new Date().toISOString();
         const dupTag = thoughtResult.duplicate ? " (dup)" : "";
         console.log(`   → Stored${dupTag} [${ingested}/${messageRefs.length - alreadyDone} done]`);
+
+        // ── Upsert contacts into people table ─────────────────────
+        for (const contact of [...parseEmailAddresses(from), ...parseEmailAddresses(to), ...parseEmailAddresses(cc)]) {
+          if (contact.email) await upsertPerson(contact.name, contact.email).catch(() => {});
+        }
 
         // ── Upsert order if present ───────────────────────────────
         if (classification.order) {
