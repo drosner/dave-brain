@@ -652,7 +652,6 @@ async function insertTodo(
       task,
       priority,
       due_date: dueDate || null,
-      project: projectName || null,
       project_id: projectId,
       area: "general",
       source: "gmail",
