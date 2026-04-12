@@ -1,1 +1,6 @@
-{"tasks":{"pull-gmail":"deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts","capture-orders":"deno run --allow-net --allow-read --allow-write --allow-env capture-orders.ts"}}
+{
+  "tasks": {
+    "pull-gmail": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env pull-gmail.ts",
+    "capture-orders": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env capture-orders.ts"
+  }
+}
