@@ -205,7 +205,7 @@ async function authorize(creds: OAuthCredentials): Promise<string> {
 
   console.log("\nWaiting for authorization...");
   const code = await new Promise<string>((resolve) => {
-    const server = Deno.serve({ port: 3847, onListen: () => {} }, (req) => {
+    const server = Deno.serve({ port: 3847, onListen: () => { } }, (req) => {
       const authCode = new URL(req.url).searchParams.get("code");
       if (authCode) {
         resolve(authCode);
@@ -634,7 +634,36 @@ async function upsertPerson(name: string, email: string): Promise<void> {
 }
 
 // ─── Order Upsert ───────────────────────────────────────────────────────────
+// ─── Todo Insert ─────────────────────────────────────────────────────────────
 
+async function insertTodo(
+  task: string,
+  urgency: string,
+  dueDate: string | null,
+  projectName: string | null,
+  sourceId: string | null,
+): Promise<void> {
+  const projectId = await lookupProjectId(projectName);
+  const priority = urgency === "high" ? "high" : urgency === "low" ? "low" : "medium";
+  const res = await supabaseQuery("/todos", {
+    method: "POST",
+    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+    body: JSON.stringify({
+      task,
+      priority,
+      due_date: dueDate || null,
+      project: projectName || null,
+      project_id: projectId,
+      area: "general",
+      source: "gmail",
+      source_id: sourceId,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Todo insert failed: ${body}`);
+  }
+}
 interface OrderData {
   vendor: string;
   item_description: string;
@@ -674,6 +703,14 @@ async function findExistingOrder(
 async function upsertOrder(
   order: OrderData, emailDate: string, emailId: string,
 ): Promise<{ ok: boolean; id?: string; action?: string; error?: string }> {
+  // Normalize status to match DB constraint
+  const statusMap: Record<string, string> = {
+    "out for delivery": "out_for_delivery",
+    "in transit": "in_transit",
+    "on the way": "in_transit",
+  };
+  order.status = statusMap[order.status?.toLowerCase()] ?? order.status;
+
   const existing = await findExistingOrder(order.order_number, order.vendor, order.tracking_number);
 
   if (existing) {
@@ -836,9 +873,9 @@ async function main() {
 
       const typeIcon = classification.order ? "📦" :
         classification.type === "task" ? "✅" :
-        classification.type === "scheduling" ? "📅" :
-        classification.type === "decision" ? "⚖️" :
-        classification.type === "follow_up" ? "🔄" : "💬";
+          classification.type === "scheduling" ? "📅" :
+            classification.type === "decision" ? "⚖️" :
+              classification.type === "follow_up" ? "🔄" : "💬";
 
       console.log(`   ${typeIcon} ${classification.type}: ${classification.summary || "(no summary)"}`);
       if (classification.topics?.length) console.log(`   Topics: ${classification.topics.join(", ")}`);
@@ -858,7 +895,27 @@ async function main() {
         continue;
       }
 
-      // ── Embed and store thought ───────────────────────────────────
+      // ── Order emails: orders table only, skip thought storage ─────
+      if (classification.order) {
+        try {
+          const orderResult = await upsertOrder(classification.order, date, ref.id);
+          if (orderResult.ok) {
+            if (orderResult.action === "created") { ordersCreated++; console.log(`   📦 Order created`); }
+            else if (orderResult.action === "updated") { ordersUpdated++; console.log(`   📦 Order updated`); }
+            else console.log(`   📦 Order duplicate (skipped)`);
+          } else {
+            console.error(`   📦 Order error: ${orderResult.error}`);
+          }
+        } catch (orderErr) {
+          console.error(`   📦 Order failed: ${orderErr}`);
+        }
+        syncLog.skipped_ids[ref.id] = new Date().toISOString();
+        ingested++;
+        console.log();
+        continue;
+      }
+
+      // ── Embed and store thought (non-order emails only) ───────────
       const header = `[Email from ${from} | To: ${to}${cc ? ` | CC: ${cc}` : ""} | Subject: ${subject} | Date: ${date}]`;
       const content = `${header}\n\n${body}`;
 
@@ -876,9 +933,11 @@ async function main() {
           .map(c => c.name ? `${c.name} <${c.email}>` : c.email),
         ...classification,
       };
-      // Remove the raw order object from thought metadata (it goes in the orders table)
+      // Remove fields that don't belong in thoughts
       delete metadata.skip;
       delete metadata.skip_reason;
+      delete metadata.people;  // raw objects — serialized contacts field above replaces this
+      delete metadata.order;   // order data lives in orders table only, not thoughts
 
       const thoughtResult = await insertThought(content, embedding, metadata);
 
@@ -890,29 +949,24 @@ async function main() {
 
         // ── Upsert contacts into people table ─────────────────────
         for (const contact of [...parseEmailAddresses(from), ...parseEmailAddresses(to), ...parseEmailAddresses(cc)]) {
-          if (contact.email) await upsertPerson(contact.name, contact.email).catch(() => {});
+          if (contact.email) await upsertPerson(contact.name, contact.email).catch(() => { });
         }
 
-        // ── Upsert order if present ───────────────────────────────
-        if (classification.order) {
-          try {
-            const orderResult = await upsertOrder(classification.order, date, ref.id);
-            if (orderResult.ok) {
-              if (orderResult.action === "created") { ordersCreated++; console.log(`   📦 Order created`); }
-              else if (orderResult.action === "updated") { ordersUpdated++; console.log(`   📦 Order updated`); }
-              else console.log(`   📦 Order duplicate (skipped)`);
-
-              // Link thought to order
-              if (thoughtResult.id && orderResult.id && orderResult.id !== "duplicate") {
-                await supabaseQuery(`/orders?id=eq.${orderResult.id}`, {
-                  method: "PATCH", body: JSON.stringify({ thought_id: thoughtResult.id }),
-                });
-              }
-            } else {
-              console.error(`   📦 Order error: ${orderResult.error}`);
+        // ── Write action items to todos table ─────────────────────
+        if (classification.action_items?.length && thoughtResult.id) {
+          for (const ai of classification.action_items) {
+            try {
+              await insertTodo(
+                ai.task,
+                ai.urgency,
+                ai.due_date || null,
+                classification.project || null,
+                thoughtResult.id,
+              );
+              console.log(`   ✅ TODO saved: ${ai.task.slice(0, 60)}`);
+            } catch (todoErr) {
+              console.error(`   ✅ TODO failed: ${todoErr}`);
             }
-          } catch (orderErr) {
-            console.error(`   📦 Order failed: ${orderErr}`);
           }
         }
       } else {
