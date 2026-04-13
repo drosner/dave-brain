@@ -641,6 +641,7 @@ async function insertTodo(
   urgency: string,
   dueDate: string | null,
   projectName: string | null,
+  thoughtId: string | null,
 ): Promise<void> {
   const projectId = await lookupProjectId(projectName);
   const priority = urgency === "high" ? "high" : urgency === "low" ? "low" : "medium";
@@ -648,11 +649,16 @@ async function insertTodo(
     method: "POST",
     headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
     body: JSON.stringify({
-      task,
+      title: task,
       priority,
       due_date: dueDate || null,
       project_id: projectId,
       area: "general",
+      thought_id: thoughtId || null,
+      metadata: {
+        source: "gmail",
+        project_name: projectName || null,
+      },
     }),
   });
   if (!res.ok) {
@@ -660,6 +666,7 @@ async function insertTodo(
     throw new Error(`Todo insert failed: ${body}`);
   }
 }
+
 interface OrderData {
   vendor: string;
   item_description: string;
@@ -741,7 +748,7 @@ async function upsertOrder(
 
   const projectId = await lookupProjectId(order.project);
   const orderRow: Record<string, unknown> = {
-    item_description: order.item_description, vendor: order.vendor,
+    item_description: order.item_description || `Package via ${order.vendor || "carrier"}`, vendor: order.vendor,
     order_number: order.order_number, order_date: emailDate.split("T")[0],
     estimated_delivery: order.estimated_delivery, actual_delivery: order.actual_delivery,
     amount: order.amount, currency: order.currency || "USD",
@@ -957,6 +964,7 @@ async function main() {
                 ai.urgency,
                 ai.due_date || null,
                 classification.project || null,
+                thoughtResult.id,
               );
               console.log(`   ✅ TODO saved: ${ai.task.slice(0, 60)}`);
             } catch (todoErr) {
