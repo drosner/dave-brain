@@ -633,6 +633,22 @@ async function upsertPerson(name: string, email: string): Promise<void> {
   });
 }
 
+function isAngelFlightBulkEmail(from: string, subject: string): boolean {
+  const fromLower = from.toLowerCase();
+  const subjectLower = subject.toLowerCase();
+  const isFromAF = fromLower.includes("angelflighteast") ||
+    fromLower.includes("angel flight");
+  const isBulk = subjectLower.includes("flights ready") ||
+    subjectLower.includes("missions available") ||
+    subjectLower.includes("flyby") ||
+    subjectLower.includes("pilots needed") ||
+    subjectLower.includes("flights needed") ||
+    subjectLower.includes("help for") ||
+    subjectLower.includes("lend a hand");
+  return isFromAF && isBulk;
+}
+
+
 function inferArea(projectName: string | null): string {
   if (!projectName) return "personal";
   const name = projectName.toLowerCase();
@@ -722,12 +738,46 @@ async function findExistingOrder(
 async function upsertOrder(
   order: OrderData, emailDate: string, emailId: string,
 ): Promise<{ ok: boolean; id?: string; action?: string; error?: string }> {
+
   // Normalize status to match DB constraint
   const statusMap: Record<string, string> = {
+    // spacing variants
     "out for delivery": "out_for_delivery",
     "in transit": "in_transit",
     "on the way": "in_transit",
+    // return/refund variants
+    "refunded": "returned",
+    "refund": "returned",
+    "return": "returned",
+    "returning": "returned",
+    "return initiated": "returned",
+    // cancellation variants
+    "canceled": "cancelled",
+    "canceled by buyer": "cancelled",
+    "canceled by seller": "cancelled",
+    "cancellation": "cancelled",
+    // delivery variants
+    "out_for_delivery": "out_for_delivery",
+    "arrived": "delivered",
+    "complete": "delivered",
+    "completed": "delivered",
+    // shipping variants
+    "dispatched": "shipped",
+    "label created": "ordered",
+    "payment received": "ordered",
+    "processing": "ordered",
+    "confirmed": "ordered",
   };
+  // Apply normalization case-insensitively
+  const normalized = statusMap[order.status?.toLowerCase()];
+  if (normalized) order.status = normalized;
+  // Final safety net — if still not valid, default to ordered
+  const validStatuses = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "returned", "cancelled"];
+  if (!validStatuses.includes(order.status)) {
+    console.log(`   ⚠️  Unknown status "${order.status}" — defaulting to "ordered"`);
+    order.status = "ordered";
+  }
+
   order.status = statusMap[order.status?.toLowerCase()] ?? order.status;
 
   const existing = await findExistingOrder(order.order_number, order.vendor, order.tracking_number);
@@ -958,6 +1008,12 @@ async function main() {
       delete metadata.people;  // raw objects — serialized contacts field above replaces this
       delete metadata.order;   // order data lives in orders table only, not thoughts
 
+      // Tag Angel Flight emails for future flight-matching agent
+      if (isAngelFlightBulkEmail(from, subject)) {
+        metadata.angel_flight_type = "mission_availability";
+        metadata.agent_target = "flight_matching_agent";
+      }
+
       const thoughtResult = await insertThought(content, embedding, metadata);
 
       if (thoughtResult.ok) {
@@ -972,7 +1028,9 @@ async function main() {
         }
 
         // ── Write action items to todos table ─────────────────────
-        if (classification.action_items?.length && thoughtResult.id) {
+        // Skip bulk Angel Flight availability emails — stored as thoughts for future agent
+        const skipTodos = isAngelFlightBulkEmail(from, subject);
+        if (classification.action_items?.length && thoughtResult.id && !skipTodos) {
           for (const ai of classification.action_items) {
             try {
               await insertTodo(
