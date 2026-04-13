@@ -641,7 +641,6 @@ async function insertTodo(
   urgency: string,
   dueDate: string | null,
   projectName: string | null,
-  sourceId: string | null,
 ): Promise<void> {
   const projectId = await lookupProjectId(projectName);
   const priority = urgency === "high" ? "high" : urgency === "low" ? "low" : "medium";
@@ -654,8 +653,6 @@ async function insertTodo(
       due_date: dueDate || null,
       project_id: projectId,
       area: "general",
-      source: "gmail",
-      source_id: sourceId,
     }),
   });
   if (!res.ok) {
@@ -960,7 +957,6 @@ async function main() {
                 ai.urgency,
                 ai.due_date || null,
                 classification.project || null,
-                thoughtResult.id,
               );
               console.log(`   ✅ TODO saved: ${ai.task.slice(0, 60)}`);
             } catch (todoErr) {
