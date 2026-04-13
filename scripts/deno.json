@@ -1,6 +1,7 @@
 {
   "tasks": {
     "pull-gmail": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env pull-gmail.ts",
+    "pull-gmail-log": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env pull-gmail.ts 2>&1 | tee logs/pull-gmail-$(date +%Y%m%d-%H%M%S).log",
     "capture-orders": "deno run --allow-net --allow-read --allow-write --allow-env --env-file=.env capture-orders.ts"
   }
 }
