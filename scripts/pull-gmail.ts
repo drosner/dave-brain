@@ -633,6 +633,22 @@ async function upsertPerson(name: string, email: string): Promise<void> {
   });
 }
 
+function inferArea(projectName: string | null): string {
+  if (!projectName) return "personal";
+  const name = projectName.toLowerCase();
+  if (name.includes("house") || name.includes("pool") || name.includes("home") || name.includes("boiler")) return "house";
+  if (name.includes("workshop") || name.includes("workbench") || name.includes("metal") || name.includes("wood")) return "workshop";
+  if (name.includes("fly") || name.includes("angel flight") || name.includes("seneca") || name.includes("aviation") || name.includes("pilot")) return "aviation";
+  if (name.includes("pi") || name.includes("brain") || name.includes("ai") || name.includes("home assistant") || name.includes("tech") || name.includes("scaffold")) return "tech";
+  if (name.includes("wine")) return "wine";
+  if (name.includes("ski") || name.includes("killington") || name.includes("rental")) return "rental_property";
+  if (name.includes("work") || name.includes("deloitte") || name.includes("client")) return "work";
+  if (name.includes("family")) return "family";
+  return "personal";
+}
+
+
+
 // ─── Order Upsert ───────────────────────────────────────────────────────────
 // ─── Todo Insert ─────────────────────────────────────────────────────────────
 
@@ -653,7 +669,7 @@ async function insertTodo(
       priority,
       due_date: dueDate || null,
       project_id: projectId,
-      area: "general",
+      area: inferArea(projectName),
       thought_id: thoughtId || null,
       metadata: {
         source: "gmail",
