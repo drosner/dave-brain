@@ -276,6 +276,9 @@ function windowToQuery(window: string): string {
     case "30d": after = new Date(now.getTime() - 30 * 86400000); break;
     case "90d": after = new Date(now.getTime() - 90 * 86400000); break;
     case "1y": after = new Date(now.getTime() - 365 * 86400000); break;
+    case "2y": after = new Date(now.getTime() - 2 * 365 * 86400000); break;
+    case "3y": after = new Date(now.getTime() - 3 * 365 * 86400000); break;
+    case "5y": after = new Date(now.getTime() - 5 * 365 * 86400000); break;
     case "all": return "";
     default: console.error(`Unknown window: ${window}`); Deno.exit(1);
   }
