@@ -463,18 +463,30 @@ SKIP these (set skip=true):
 - Social media notifications (likes, follows, comments)
 - Security alerts, password resets, verification codes, OTPs
 - Automated account notifications (new sign-in, statement ready)
+- Bank balance alerts and threshold notifications (e.g. "Your available balance is $X")
+- Payment authorization emails from PayPal where another vendor confirmation email exists (e.g. "PayPal: You authorized $X to Vendor")
+- Credit card statement available notifications (no action needed, auto-pay handles it)
 - Spam, phishing, or generic form responses
 - Mailing list messages with no personal relevance
 - Subscription confirmations for content services
 - Generic "welcome" or onboarding emails from services
 - News updates, breaking news alerts, media digests
 - Community digests (Nextdoor, HOA newsletters, neighborhood updates)
+- Anything from Segpay
 
 KEY RULE: If the email was sent to many subscribers (not personally to the recipient), it is NOISE regardless of how interesting or well-written the content is. The test is: "Did a human write this specifically to/for the recipient?" If no, skip it.
+
+CRITICAL — these are always noise regardless of content quality:
+- Any email from a Substack author (substack.com in sender domain or unsubscribe link)
+- Any email from a paid newsletter or media publication (NYT, WSJ, Free Press, Attia, etc.)
+- Any email with an unsubscribe link at the bottom that was sent to a mailing list
+- FAASafety.gov webinar announcements and safety bulletins (mass distributed)
+- Any email where the recipient is addressed generically ("Dear Member", "Hello Pilot") 
 
 KEEP these (set skip=false):
 - Real conversations between people (personal or professional)
 - Order confirmations, shipping notifications, delivery updates
+- NOTE: CellarTracker "wines have been added" emails are NOT orders — they are cellar management notifications. Set skip=true for these.
 - Invoices, receipts for actual purchases
 - Emails with action items, tasks, or requests
 - Scheduling, meeting coordination
@@ -674,14 +686,22 @@ async function insertTodo(
   dueDate: string | null,
   projectName: string | null,
   thoughtId: string | null,
+  emailDate: string,
 ): Promise<void> {
   const projectId = await lookupProjectId(projectName);
   const priority = urgency === "high" ? "high" : urgency === "low" ? "low" : "medium";
+
+  // Auto-cancel todos from emails older than 30 days — they're historical
+  const emailAge = Date.now() - new Date(emailDate).getTime();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  const status = emailAge > thirtyDays ? "cancelled" : "open";
+
   const res = await supabaseQuery("/todos", {
     method: "POST",
     headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
     body: JSON.stringify({
       title: task,
+      status,
       priority,
       due_date: dueDate || null,
       project_id: projectId,
@@ -698,6 +718,7 @@ async function insertTodo(
     throw new Error(`Todo insert failed: ${body}`);
   }
 }
+
 
 interface OrderData {
   vendor: string;
@@ -1039,6 +1060,7 @@ async function main() {
                 ai.due_date || null,
                 classification.project || null,
                 thoughtResult.id,
+                date,
               );
               console.log(`   ✅ TODO saved: ${ai.task.slice(0, 60)}`);
             } catch (todoErr) {
