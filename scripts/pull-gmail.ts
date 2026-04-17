@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 
 /**
- * Open Brain — Gmail Ingestion v2
+ * Open Brain — Gmail Ingestion v3
  *
  * Uses Gmail's built-in categorization (Primary, Updates) as first-pass filter,
  * then a single LLM call per email to classify, extract metadata, and detect orders.
@@ -17,10 +17,11 @@
  *   deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts [options]
  *
  * Options:
- *   --window=24h|7d|30d|90d|1y|all  Time window (default: all)
+ *   --window=24h|7d|30d|90d|1y|2y|3y|5y|all  Time window (default: all)
  *   --categories=PRIMARY,UPDATES    Gmail categories (default: PRIMARY,UPDATES)
  *   --dry-run                       Classify and show results without storing
- *   --limit=N                       Max emails to process (default: 500)
+ *   --orders-only                   Only extract orders, skip thoughts/todos/people
+ *   --limit=N                       Max emails to process (default: 50000)
  *   --skip=N                        Skip first N messages (resume after crash)
  *   --list-labels                   List Gmail labels and exit
  *
@@ -47,14 +48,13 @@ const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 interface SyncLog {
   ingested_ids: Record<string, string>;
-  skipped_ids: Record<string, string>;  // track noise emails too so we don't re-classify
+  skipped_ids: Record<string, string>;
   last_sync: string;
 }
 
 async function loadSyncLog(): Promise<SyncLog> {
   try {
     const data = JSON.parse(await Deno.readTextFile(SYNC_LOG_PATH));
-    // Migrate old format: add skipped_ids if missing
     if (!data.skipped_ids) data.skipped_ids = {};
     return data;
   } catch {
@@ -84,6 +84,7 @@ interface CliArgs {
   window: string;
   categories: string[];
   dryRun: boolean;
+  ordersOnly: boolean;
   limit: number;
   skip: number;
   listLabels: boolean;
@@ -94,7 +95,8 @@ function parseArgs(): CliArgs {
     window: "all",
     categories: ["PRIMARY", "UPDATES"],
     dryRun: false,
-    limit: 500,
+    ordersOnly: false,
+    limit: 50000,
     skip: 0,
     listLabels: false,
   };
@@ -105,6 +107,7 @@ function parseArgs(): CliArgs {
       args.categories = arg.split("=")[1].toUpperCase().split(",").map((c) => c.trim());
     }
     else if (arg === "--dry-run") args.dryRun = true;
+    else if (arg === "--orders-only") args.ordersOnly = true;
     else if (arg.startsWith("--limit=")) args.limit = parseInt(arg.split("=")[1], 10);
     else if (arg.startsWith("--skip=")) args.skip = parseInt(arg.split("=")[1], 10);
     else if (arg === "--list-labels") args.listLabels = true;
@@ -288,7 +291,6 @@ function windowToQuery(window: string): string {
 async function listMessagesForCategory(
   accessToken: string, category: string, query: string, limit: number,
 ): Promise<GmailMessageRef[]> {
-  // Gmail categories must be queried via q= parameter, not labelIds
   const catQuery = `category:${category.toLowerCase()}`;
   const fullQuery = query ? `${catQuery} ${query}` : catQuery;
   const messages: GmailMessageRef[] = [];
@@ -406,13 +408,44 @@ function parseEmailAddresses(headerValue: string): ExtractedContact[] {
   return contacts;
 }
 
+// ─── Angel Flight Detection ──────────────────────────────────────────────────
+
+function isAngelFlightBulkEmail(from: string, subject: string): boolean {
+  const fromLower = from.toLowerCase();
+  const subjectLower = subject.toLowerCase();
+  const isFromAF = fromLower.includes("angelflighteast") || fromLower.includes("angel flight");
+  const isBulk = subjectLower.includes("flights ready") ||
+    subjectLower.includes("missions available") ||
+    subjectLower.includes("flyby") ||
+    subjectLower.includes("pilots needed") ||
+    subjectLower.includes("flights needed") ||
+    subjectLower.includes("help for") ||
+    subjectLower.includes("lend a hand");
+  return isFromAF && isBulk;
+}
+
+// ─── Area Inference ──────────────────────────────────────────────────────────
+
+function inferArea(projectName: string | null): string {
+  if (!projectName) return "personal";
+  const name = projectName.toLowerCase();
+  if (name.includes("house") || name.includes("pool") || name.includes("home") || name.includes("boiler")) return "house";
+  if (name.includes("workshop") || name.includes("workbench") || name.includes("metal") || name.includes("wood")) return "workshop";
+  if (name.includes("fly") || name.includes("angel flight") || name.includes("seneca") || name.includes("aviation") || name.includes("pilot")) return "aviation";
+  if (name.includes("pi") || name.includes("brain") || name.includes("ai") || name.includes("home assistant") || name.includes("tech") || name.includes("scaffold")) return "tech";
+  if (name.includes("wine")) return "wine";
+  if (name.includes("ski") || name.includes("killington") || name.includes("rental")) return "rental_property";
+  if (name.includes("work") || name.includes("deloitte") || name.includes("client")) return "work";
+  if (name.includes("family")) return "family";
+  return "personal";
+}
+
 // ─── Unified LLM Classification + Extraction ────────────────────────────────
 
 interface ClassificationResult {
   skip: boolean;
   skip_reason?: string;
   type: string;
-  // Metadata (present when skip=false)
   people?: { name: string; email?: string; role: string }[];
   action_items?: { task: string; assignee?: string; due_date?: string; urgency: string }[];
   topics?: string[];
@@ -423,7 +456,6 @@ interface ClassificationResult {
   financial_amounts?: string[];
   project?: string;
   summary?: string;
-  // Order fields (present when type is order-related)
   order?: {
     vendor: string;
     item_description: string;
@@ -484,7 +516,7 @@ CRITICAL — these are always noise regardless of content quality:
 - Any email from a paid newsletter or media publication (NYT, WSJ, Free Press, Attia, etc.)
 - Any email with an unsubscribe link at the bottom that was sent to a mailing list
 - FAASafety.gov webinar announcements and safety bulletins (mass distributed)
-- Any email where the recipient is addressed generically ("Dear Member", "Hello Pilot") 
+- Any email where the recipient is addressed generically ("Dear Member", "Hello Pilot")
 
 KEEP these (set skip=false):
 - Real conversations between people (personal or professional)
@@ -648,39 +680,6 @@ async function upsertPerson(name: string, email: string): Promise<void> {
   });
 }
 
-function isAngelFlightBulkEmail(from: string, subject: string): boolean {
-  const fromLower = from.toLowerCase();
-  const subjectLower = subject.toLowerCase();
-  const isFromAF = fromLower.includes("angelflighteast") ||
-    fromLower.includes("angel flight");
-  const isBulk = subjectLower.includes("flights ready") ||
-    subjectLower.includes("missions available") ||
-    subjectLower.includes("flyby") ||
-    subjectLower.includes("pilots needed") ||
-    subjectLower.includes("flights needed") ||
-    subjectLower.includes("help for") ||
-    subjectLower.includes("lend a hand");
-  return isFromAF && isBulk;
-}
-
-
-function inferArea(projectName: string | null): string {
-  if (!projectName) return "personal";
-  const name = projectName.toLowerCase();
-  if (name.includes("house") || name.includes("pool") || name.includes("home") || name.includes("boiler")) return "house";
-  if (name.includes("workshop") || name.includes("workbench") || name.includes("metal") || name.includes("wood")) return "workshop";
-  if (name.includes("fly") || name.includes("angel flight") || name.includes("seneca") || name.includes("aviation") || name.includes("pilot")) return "aviation";
-  if (name.includes("pi") || name.includes("brain") || name.includes("ai") || name.includes("home assistant") || name.includes("tech") || name.includes("scaffold")) return "tech";
-  if (name.includes("wine")) return "wine";
-  if (name.includes("ski") || name.includes("killington") || name.includes("rental")) return "rental_property";
-  if (name.includes("work") || name.includes("deloitte") || name.includes("client")) return "work";
-  if (name.includes("family")) return "family";
-  return "personal";
-}
-
-
-
-// ─── Order Upsert ───────────────────────────────────────────────────────────
 // ─── Todo Insert ─────────────────────────────────────────────────────────────
 
 async function insertTodo(
@@ -722,6 +721,7 @@ async function insertTodo(
   }
 }
 
+// ─── Order Upsert ────────────────────────────────────────────────────────────
 
 interface OrderData {
   vendor: string;
@@ -762,47 +762,37 @@ async function findExistingOrder(
 async function upsertOrder(
   order: OrderData, emailDate: string, emailId: string,
 ): Promise<{ ok: boolean; id?: string; action?: string; error?: string }> {
-
   // Normalize status to match DB constraint
   const statusMap: Record<string, string> = {
-    // spacing variants
     "out for delivery": "out_for_delivery",
     "in transit": "in_transit",
     "on the way": "in_transit",
-    // return/refund variants
     "refunded": "returned",
     "refund": "returned",
     "return": "returned",
     "returning": "returned",
     "return initiated": "returned",
-    // cancellation variants
     "canceled": "cancelled",
     "canceled by buyer": "cancelled",
     "canceled by seller": "cancelled",
     "cancellation": "cancelled",
-    // delivery variants
     "out_for_delivery": "out_for_delivery",
     "arrived": "delivered",
     "complete": "delivered",
     "completed": "delivered",
-    // shipping variants
     "dispatched": "shipped",
     "label created": "ordered",
     "payment received": "ordered",
     "processing": "ordered",
     "confirmed": "ordered",
   };
-  // Apply normalization case-insensitively
   const normalized = statusMap[order.status?.toLowerCase()];
   if (normalized) order.status = normalized;
-  // Final safety net — if still not valid, default to ordered
   const validStatuses = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "returned", "cancelled"];
   if (!validStatuses.includes(order.status)) {
     console.log(`   ⚠️  Unknown status "${order.status}" — defaulting to "ordered"`);
     order.status = "ordered";
   }
-
-  order.status = statusMap[order.status?.toLowerCase()] ?? order.status;
 
   const existing = await findExistingOrder(order.order_number, order.vendor, order.tracking_number);
 
@@ -838,15 +828,23 @@ async function upsertOrder(
 
   const projectId = await lookupProjectId(order.project);
   const orderRow: Record<string, unknown> = {
-    item_description: order.item_description || `Package via ${order.vendor || "carrier"}`, vendor: order.vendor,
-    order_number: order.order_number, order_date: emailDate.split("T")[0],
-    estimated_delivery: order.estimated_delivery, actual_delivery: order.actual_delivery,
-    amount: order.amount, currency: order.currency || "USD",
+    item_description: order.item_description || `Package via ${order.vendor || "carrier"}`,
+    vendor: order.vendor,
+    order_number: order.order_number,
+    order_date: emailDate.split("T")[0],
+    estimated_delivery: order.estimated_delivery,
+    actual_delivery: order.actual_delivery,
+    amount: order.amount,
+    currency: order.currency || "USD",
     status: order.status || "ordered",
-    tracking_number: order.tracking_number, tracking_carrier: order.tracking_carrier,
+    tracking_number: order.tracking_number,
+    tracking_carrier: order.tracking_carrier,
     tracking_url: order.tracking_url,
-    category: order.category || "personal", project: order.project, project_id: projectId,
-    source: "gmail", source_email_id: emailId,
+    category: order.category || "personal",
+    project: order.project,
+    project_id: projectId,
+    source: "gmail",
+    source_email_id: emailId,
     metadata: { items_list: order.items_list, email_history: [`${order.email_type}:${emailId}:${emailDate.split("T")[0]}`], last_email_type: order.email_type },
   };
 
@@ -877,7 +875,6 @@ async function main() {
     return;
   }
 
-  // Build label map for display
   const allLabels = await listLabels(accessToken);
   const labelMap = new Map<string, string>();
   for (const l of allLabels) labelMap.set(l.id, l.name);
@@ -887,8 +884,9 @@ async function main() {
   console.log(`  Categories: ${args.categories.join(", ")}`);
   console.log(`  Window:     ${args.window}${query ? ` (${query})` : ""}`);
   console.log(`  Limit:      ${args.limit}`);
+  console.log(`  Mode:       ${args.dryRun ? "DRY RUN" : args.ordersOnly ? "ORDERS ONLY" : "live"}`);
   if (args.skip > 0) console.log(`  Skip:       ${args.skip} (resuming)`);
-  console.log(`  Mode:       ${args.dryRun ? "DRY RUN" : "live"}\n`);
+  console.log();
 
   if (!args.dryRun) {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -907,7 +905,6 @@ async function main() {
   console.log(`Processing ${messageRefs.length} messages.\n`);
   if (messageRefs.length === 0) return;
 
-  // Counters
   let processed = 0, alreadyDone = 0, noiseSkipped = 0, ingested = 0, errors = 0;
   let ordersCreated = 0, ordersUpdated = 0, totalWords = 0, classifyCalls = 0;
 
@@ -915,7 +912,6 @@ async function main() {
     const ref = messageRefs[i];
     const globalIdx = args.skip + i + 1;
 
-    // Skip already-processed emails (ingested or classified as noise)
     if (syncLog.ingested_ids[ref.id] || syncLog.skipped_ids[ref.id]) {
       alreadyDone++;
       continue;
@@ -941,11 +937,9 @@ async function main() {
         continue;
       }
 
-      // Determine which Gmail category this email is in
       const gmailCategory = (msg.labelIds || [])
         .find((l) => l.startsWith("CATEGORY_"))?.replace("CATEGORY_", "") || "UNKNOWN";
 
-      // ── Unified LLM classification ────────────────────────────────
       console.log(`${globalIdx}. ${subject.slice(0, 70)}`);
       console.log(`   From: ${from.slice(0, 60)} | ${new Date(date).toLocaleDateString()} | [${gmailCategory}]`);
 
@@ -972,7 +966,7 @@ async function main() {
 
       console.log(`   ${typeIcon} ${classification.type}: ${classification.summary || "(no summary)"}`);
       if (classification.topics?.length) console.log(`   Topics: ${classification.topics.join(", ")}`);
-      if (classification.action_items?.length) {
+      if (classification.action_items?.length && !args.ordersOnly) {
         for (const ai of classification.action_items) {
           console.log(`   → TODO: ${ai.task}${ai.due_date ? ` (due ${ai.due_date})` : ""} [${ai.urgency}]`);
         }
@@ -988,7 +982,30 @@ async function main() {
         continue;
       }
 
-      // ── Order emails: orders table only, skip thought storage ─────
+      // ── ORDERS-ONLY MODE: process order if present, skip everything else ──
+      if (args.ordersOnly) {
+        if (classification.order) {
+          try {
+            const orderResult = await upsertOrder(classification.order, date, ref.id);
+            if (orderResult.ok) {
+              if (orderResult.action === "created") { ordersCreated++; console.log(`   📦 Order created`); }
+              else if (orderResult.action === "updated") { ordersUpdated++; console.log(`   📦 Order updated`); }
+              else console.log(`   📦 Order duplicate (skipped)`);
+            } else {
+              console.error(`   📦 Order error: ${orderResult.error}`);
+            }
+          } catch (orderErr) {
+            console.error(`   📦 Order failed: ${orderErr}`);
+          }
+        }
+        // Always mark processed so future full runs skip this email
+        syncLog.skipped_ids[ref.id] = new Date().toISOString();
+        ingested++;
+        console.log();
+        continue;
+      }
+
+      // ── FULL MODE: order emails go to orders table only, skip thought storage ──
       if (classification.order) {
         try {
           const orderResult = await upsertOrder(classification.order, date, ref.id);
@@ -1026,11 +1043,10 @@ async function main() {
           .map(c => c.name ? `${c.name} <${c.email}>` : c.email),
         ...classification,
       };
-      // Remove fields that don't belong in thoughts
       delete metadata.skip;
       delete metadata.skip_reason;
-      delete metadata.people;  // raw objects — serialized contacts field above replaces this
-      delete metadata.order;   // order data lives in orders table only, not thoughts
+      delete metadata.people;
+      delete metadata.order;
 
       // Tag Angel Flight emails for future flight-matching agent
       if (isAngelFlightBulkEmail(from, subject)) {
@@ -1052,7 +1068,6 @@ async function main() {
         }
 
         // ── Write action items to todos table ─────────────────────
-        // Skip bulk Angel Flight availability emails — stored as thoughts for future agent
         const skipTodos = isAngelFlightBulkEmail(from, subject);
         if (classification.action_items?.length && thoughtResult.id && !skipTodos) {
           for (const ai of classification.action_items) {
@@ -1071,8 +1086,6 @@ async function main() {
             }
           }
         }
-
-
 
       } else {
         errors++;
@@ -1105,7 +1118,6 @@ async function main() {
     await saveSyncLog(syncLog);
   }
 
-  // ── Summary ─────────────────────────────────────────────────────────────
   console.log("─".repeat(60));
   console.log("Summary:");
   console.log(`  Emails fetched:    ${messageRefs.length}`);
@@ -1121,11 +1133,11 @@ async function main() {
     console.log(`  Errors:           ${errors}`);
   }
 
-  // Cost: 1 classify call per non-already-done email + 1 embedding per keeper
   const classifyCost = classifyCalls * 0.00015;
-  const embedCost = (totalWords / 750) * 0.00002;
+  const embedCost = args.ordersOnly ? 0 : (totalWords / 750) * 0.00002;
   const totalCost = classifyCost + embedCost;
   console.log(`  Est. API cost:    $${totalCost.toFixed(4)} (classify: $${classifyCost.toFixed(4)}, embed: $${embedCost.toFixed(4)})`);
+  if (args.ordersOnly) console.log(`  Mode: orders-only (no embedding cost)`);
 
   if (errors > 0) {
     console.log(`\n  ⚠️  ${errors} errors. Re-run to retry — processed emails are tracked in sync-log.`);
