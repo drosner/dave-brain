@@ -18,3 +18,7 @@ desktop.ini
 
 keys.txt
 open-brain-credential-tracker.pdf
+
+# Wine scanner app
+wine-scanner/node_modules/
+wine-scanner/server.log

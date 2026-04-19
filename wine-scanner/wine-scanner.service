@@ -1,0 +1,15 @@
+[Unit]
+Description=Wine Scanner Web App
+After=network.target
+
+[Service]
+Type=simple
+User=drosner
+WorkingDirectory=/home/drosner/wine-scanner
+EnvironmentFile=/home/drosner/n8n/.env
+ExecStart=/home/drosner/.nvm/versions/node/v24.15.0/bin/node /home/drosner/wine-scanner/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
