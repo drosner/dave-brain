@@ -112,7 +112,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\nfunction parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n  while (i < text.length) {\n    const ch = text[i];\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') { field += '\"'; i += 2; continue; }\n        inQuotes = false; i += 1; continue;\n      }\n      field += ch; i += 1; continue;\n    }\n    if (ch === '\"') { inQuotes = true; i += 1; continue; }\n    if (ch === ',') { row.push(field); field = ''; i += 1; continue; }\n    if (ch === '\\n') { row.push(field); field = ''; rows.push(row); row = []; i += 1; continue; }\n    field += ch; i += 1;\n  }\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (!rows.length) return [];\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows.slice(1).filter(r => r.some(v => String(v || '').trim() !== '')).map(r => {\n    const obj = {};\n    header.forEach((h, idx) => { obj[h] = r[idx] ?? ''; });\n    return obj;\n  });\n}\n\nconst allInputs = $input.all();\nconst bottlesRaw = allInputs[0]?.json?.data || '';\nconst notesRaw = allInputs[1]?.json?.data || '';\nif (!String(bottlesRaw).trim()) throw new Error('Bottles CSV input is empty');\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = String(n.iWine || n.iwine || '').trim();\n  if (!id) continue;\n  if (!notesByWine[id]) notesByWine[id] = { texts: [], latestDate: null };\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate ? new Date(notesByWine[id].latestDate) : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\nconst toDate = (v) => {\n  const s = toStr(v);\n  if (!s) return null;\n  const d = new Date(s);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);\n};\n\nconst output = [];\nfor (const row of bottles) {\n  const ct_barcode = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n  if (!ct_barcode || !ct_iwine) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n  const noteData = notesByWine[String(ct_iwine)] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n  const embeddingParts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Varietal),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    my_notes ? `Tasting notes: ${my_notes}` : null,\n  ].filter(Boolean);\n  output.push({ json: {\n    ct_barcode,\n    ct_iwine,\n    bottle_state: toStr(row.BottleState),\n    wine: toStr(row.Wine),\n    vintage: toInt(row.Vintage),\n    producer: toStr(row.Producer),\n    wine_type: toStr(row.Type),\n    color: toStr(row.Color),\n    varietal: toStr(row.Varietal),\n    master_varietal: toStr(row.MasterVarietal),\n    designation: toStr(row.Designation),\n    vineyard: toStr(row.Vineyard),\n    appellation: toStr(row.Appellation),\n    region: toStr(row.Region),\n    sub_region: toStr(row.SubRegion),\n    country: toStr(row.Country),\n    locale: toStr(row.Locale),\n    bottle_size: toStr(row.BottleSize),\n    drink_from: toInt(row.BeginConsume),\n    drink_to: toInt(row.EndConsume),\n    my_notes,\n    note_date: noteData.latestDate ? toDate(noteData.latestDate) : null,\n    location: toStr(row.Location),\n    bin: toStr(row.Bin),\n    store: toStr(row.Store),\n    purchase_date: toDate(row.PurchaseDate),\n    delivery_date: toDate(row.DeliveryDate),\n    bottle_cost: toFloat(row.BottleCost),\n    bottle_cost_currency: toStr(row.BottleCostCurrency),\n    bottle_note: toStr(row.BottleNote),\n    purchase_note: toStr(row.PurchaseNote),\n    consumption_date: toDate(row.ConsumptionDate),\n    consumption_type: toStr(row.ConsumptionType),\n    consumption_note: toStr(row.ConsumptionNote),\n    consumption_revenue: toFloat(row.ConsumptionRevenue),\n    consumption_revenue_currency: toStr(row.ConsumptionRevenueCurrency),\n    removed_at: null,\n    last_synced_at: new Date().toISOString(),\n    raw_ct_row: row,\n    embedding_text: embeddingParts.join('. '),\n  }});\n}\nif (!output.length) throw new Error('Parsed zero bottles from CellarTracker export');\nreturn output;\n"
+        "jsCode": "\nfunction parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n  while (i < text.length) {\n    const ch = text[i];\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') { field += '\"'; i += 2; continue; }\n        inQuotes = false; i += 1; continue;\n      }\n      field += ch; i += 1; continue;\n    }\n    if (ch === '\"') { inQuotes = true; i += 1; continue; }\n    if (ch === ',') { row.push(field); field = ''; i += 1; continue; }\n    if (ch === '\\n') { row.push(field); field = ''; rows.push(row); row = []; i += 1; continue; }\n    field += ch; i += 1;\n  }\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (!rows.length) return [];\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows.slice(1).filter(r => r.some(v => String(v || '').trim() !== '')).map(r => {\n    const obj = {};\n    header.forEach((h, idx) => { obj[h] = r[idx] ?? ''; });\n    return obj;\n  });\n}\n\nconst bottlesRaw = $('Fetch CT Bottles').first()?.json?.data || '';\nconst notesRaw = $('Fetch CT Notes').first()?.json?.data || '';\nif (!String(bottlesRaw).trim()) throw new Error('Bottles CSV input is empty');\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = String(n.iWine || n.iwine || '').trim();\n  if (!id) continue;\n  if (!notesByWine[id]) notesByWine[id] = { texts: [], latestDate: null };\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate ? new Date(notesByWine[id].latestDate) : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\nconst toDate = (v) => {\n  const s = toStr(v);\n  if (!s) return null;\n  const d = new Date(s);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);\n};\n\nconst output = [];\nfor (const row of bottles) {\n  const ct_barcode = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n  if (!ct_barcode || !ct_iwine) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n  const noteData = notesByWine[String(ct_iwine)] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n  const embeddingParts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Varietal),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    my_notes ? `Tasting notes: ${my_notes}` : null,\n  ].filter(Boolean);\n  output.push({ json: {\n    ct_barcode,\n    ct_iwine,\n    bottle_state: toStr(row.BottleState),\n    wine: toStr(row.Wine),\n    vintage: toInt(row.Vintage),\n    producer: toStr(row.Producer),\n    wine_type: toStr(row.Type),\n    color: toStr(row.Color),\n    varietal: toStr(row.Varietal),\n    master_varietal: toStr(row.MasterVarietal),\n    designation: toStr(row.Designation),\n    vineyard: toStr(row.Vineyard),\n    appellation: toStr(row.Appellation),\n    region: toStr(row.Region),\n    sub_region: toStr(row.SubRegion),\n    country: toStr(row.Country),\n    locale: toStr(row.Locale),\n    bottle_size: toStr(row.BottleSize),\n    drink_from: toInt(row.BeginConsume),\n    drink_to: toInt(row.EndConsume),\n    my_notes,\n    note_date: noteData.latestDate ? toDate(noteData.latestDate) : null,\n    location: toStr(row.Location),\n    bin: toStr(row.Bin),\n    store: toStr(row.Store),\n    purchase_date: toDate(row.PurchaseDate),\n    delivery_date: toDate(row.DeliveryDate),\n    bottle_cost: toFloat(row.BottleCost),\n    bottle_cost_currency: toStr(row.BottleCostCurrency),\n    bottle_note: toStr(row.BottleNote),\n    purchase_note: toStr(row.PurchaseNote),\n    consumption_date: toDate(row.ConsumptionDate),\n    consumption_type: toStr(row.ConsumptionType),\n    consumption_note: toStr(row.ConsumptionNote),\n    consumption_revenue: toFloat(row.ConsumptionRevenue),\n    consumption_revenue_currency: toStr(row.ConsumptionRevenueCurrency),\n    removed_at: null,\n    last_synced_at: new Date().toISOString(),\n    raw_ct_row: row,\n    embedding_text: embeddingParts.join('. '),\n  }});\n}\nif (!output.length) throw new Error('Parsed zero bottles from CellarTracker export');\nreturn output;\n"
       },
       "id": "e281423a-f049-43a4-94a5-79a2843dfccb",
       "name": "Parse CSV + Merge Notes",
@@ -470,7 +470,13 @@
             "node": "Fetch CT Bottles",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Fetch CT Bottles": {
+      "main": [
+        [
           {
             "node": "Fetch CT Notes",
             "type": "main",
@@ -479,7 +485,7 @@
         ]
       ]
     },
-    "Fetch CT Bottles": {
+    "Fetch CT Notes": {
       "main": [
         [
           {
@@ -494,15 +500,16 @@
       "main": [
         [
           {
-            "node": "Build Wine Embedding Batch Request",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "Collect Active Barcodes",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Collect Active Barcodes": {
+      "main": [
+        [
           {
             "node": "Fetch Existing Bottle Status",
             "type": "main",
@@ -516,6 +523,17 @@
         [
           {
             "node": "Compute Inventory Diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Inventory Diff": {
+      "main": [
+        [
+          {
+            "node": "Build Wine Embedding Batch Request",
             "type": "main",
             "index": 0
           }
