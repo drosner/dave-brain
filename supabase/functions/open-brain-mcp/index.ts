@@ -641,10 +641,6 @@ server.registerTool(
 const app = new Hono();
 
 app.all("*", async (c) => {
-  const provided = c.req.header("x-brain-key") || new URL(c.req.url).searchParams.get("key");
-  if (!provided || provided !== MCP_ACCESS_KEY) {
-    return c.json({ error: "Invalid or missing access key" }, 401);
-  }
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
   return transport.handleRequest(c);

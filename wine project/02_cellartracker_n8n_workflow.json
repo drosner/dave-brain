@@ -1,0 +1,274 @@
+{
+  "name": "CellarTracker → Supabase Wine Inventory (Nightly)",
+  "nodes": [
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 22 * * *" }]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Nightly 10pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [180, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.cellartracker.com/xlquery.asp",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "User",        "value": "={{ $env.CT_USER }}" },
+            { "name": "Password",    "value": "={{ $env.CT_PASSWORD }}" },
+            { "name": "Format",      "value": "csv" },
+            { "name": "Table",       "value": "Bottles" },
+            { "name": "BottleState", "value": "1" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "responseFormat": "text" } }
+        }
+      },
+      "id": "node-fetch-bottles",
+      "name": "Fetch CT Bottles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 200]
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.cellartracker.com/xlquery.asp",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "User",     "value": "={{ $env.CT_USER }}" },
+            { "name": "Password", "value": "={{ $env.CT_PASSWORD }}" },
+            { "name": "Format",   "value": "csv" },
+            { "name": "Table",    "value": "Notes" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "responseFormat": "text" } }
+        }
+      },
+      "id": "node-fetch-notes",
+      "name": "Fetch CT Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 420]
+    },
+
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ── CSV parser ───────────────────────────────────────────────────────────────\nfunction parseCSV(raw) {\n  if (!raw || !raw.trim()) return [];\n  const lines = raw.trim().split('\\n').map(l => l.replace(/\\r$/, ''));\n  if (lines.length < 2) return [];\n\n  const header = [];\n  let cur = '', inQ = false;\n  for (const ch of lines[0] + ',') {\n    if (ch === '\"') { inQ = !inQ; }\n    else if (ch === ',' && !inQ) { header.push(cur.trim()); cur = ''; }\n    else cur += ch;\n  }\n\n  const rows = [];\n  for (let i = 1; i < lines.length; i++) {\n    if (!lines[i].trim()) continue;\n    const values = [];\n    cur = ''; inQ = false;\n    for (const ch of lines[i] + ',') {\n      if (ch === '\"') { inQ = !inQ; }\n      else if (ch === ',' && !inQ) { values.push(cur.trim()); cur = ''; }\n      else cur += ch;\n    }\n    const obj = {};\n    header.forEach((h, idx) => { obj[h] = values[idx] ?? ''; });\n    rows.push(obj);\n  }\n  return rows;\n}\n\n// ── Inputs ────────────────────────────────────────────────────────────────────\nconst bottlesRaw = $input.all()[0].json.data;\nconst notesRaw   = $input.all()[1].json.data;\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes   = parseCSV(notesRaw);\n\n// ── Index notes by iWine ──────────────────────────────────────────────────────\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = n.iWine || n.iwine;\n  if (!id) continue;\n  if (!notesByWine[id]) notesByWine[id] = { texts: [], latestDate: null };\n  if (n.Note && n.Note.trim()) notesByWine[id].texts.push(n.Note.trim());\n  if (n.Date) {\n    const d = new Date(n.Date);\n    if (!notesByWine[id].latestDate || d > new Date(notesByWine[id].latestDate))\n      notesByWine[id].latestDate = n.Date;\n  }\n}\n\n// ── Coercions ─────────────────────────────────────────────────────────────────\nconst toInt   = v => (v !== '' && v != null && !isNaN(parseInt(v,10)))  ? parseInt(v,10)   : null;\nconst toFloat = v => (v !== '' && v != null && !isNaN(parseFloat(v)))   ? parseFloat(v)    : null;\nconst toStr   = v => (v !== '' && v != null) ? String(v).trim() : null;\n\n// ── Build output ──────────────────────────────────────────────────────────────\nconst output = [];\nfor (const row of bottles) {\n  const ibottle = row.iBottle || row.ibottle;\n  const iwine   = row.iWine   || row.iwine;\n  if (!ibottle) continue;\n\n  const noteData  = notesByWine[iwine] || { texts: [], latestDate: null };\n  const my_notes  = noteData.texts.length > 0 ? noteData.texts.join(' | ') : null;\n  const note_date = noteData.latestDate || null;\n\n  // Rich text blob for embedding — more context = better semantic recall\n  const parts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) && row.Vintage !== '0' ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Color),\n    toStr(row.Category),\n    toStr(row.Locale),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    toStr(row.Location) ? `Location: ${row.Location}` : null,\n    toStr(row.Bin)      ? `Bin: ${row.Bin}` : null,\n    toInt(row.BeginConsume) && toInt(row.EndConsume)\n      ? `Drink ${row.BeginConsume}–${row.EndConsume}` : null,\n    toFloat(row.CT)      ? `CellarTracker score ${row.CT}` : null,\n    toFloat(row.MyScore) ? `My score ${row.MyScore}` : null,\n    toFloat(row.PurchasePrice) ? `Purchased at $${row.PurchasePrice}` : null,\n    my_notes ? `Tasting notes: ${my_notes}` : null\n  ].filter(Boolean);\n\n  output.push({\n    json: {\n      ct_ibottle:     toInt(ibottle),\n      ct_iwine:       toInt(iwine),\n      wine:           toStr(row.Wine),\n      vintage:        toInt(row.Vintage),\n      producer:       toStr(row.Producer),\n      wine_type:      toStr(row.Type),\n      color:          toStr(row.Color),\n      varietal:       toStr(row.Category),\n      appellation:    toStr(row.Appellation),\n      region:         toStr(row.Region),\n      country:        toStr(row.Country),\n      locale:         toStr(row.Locale),\n      location:       toStr(row.Location),\n      bin:            toStr(row.Bin),\n      purchase_price: toFloat(row.PurchasePrice),\n      valuation:      toFloat(row.Valuation),\n      drink_from:     toInt(row.BeginConsume),\n      drink_to:       toInt(row.EndConsume),\n      ct_score:       toFloat(row.CT),\n      my_score:       toFloat(row.MyScore),\n      my_notes,\n      note_date,\n      removed_at:     null,\n      last_synced_at: new Date().toISOString(),\n      raw_ct_row:     JSON.stringify(row),\n      embedding_text: parts.join('. ')\n    }\n  });\n}\n\nreturn output;\n"
+      },
+      "id": "node-parse",
+      "name": "Parse CSV + Merge Notes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+
+    {
+      "parameters": {
+        "batchSize": 20,
+        "options": {}
+      },
+      "id": "node-batch",
+      "name": "Batch × 20",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [860, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "openai/text-embedding-3-large",
+          "input": "={{ $json.embedding_text }}",
+          "dimensions": 3072
+        },
+        "options": {}
+      },
+      "id": "node-embed",
+      "name": "OpenRouter Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// The embedding HTTP call replaced $json with the OpenRouter response.\n// Recover the original wine record from the Parse node via item pairing.\nconst oai    = $json;\nconst wine   = $('Parse CSV + Merge Notes').item.json;\n\nconst embedding = oai?.data?.[0]?.embedding;\nif (!embedding || !Array.isArray(embedding)) {\n  throw new Error(`No embedding returned for wine: ${wine.wine} (iBottle ${wine.ct_ibottle})`);\n}\n\nreturn {\n  json: {\n    ...wine,\n    embedding:      `[${embedding.join(',')}]`,   // Supabase REST expects stringified vector\n    embedding_text: undefined                      // don't persist the raw text blob\n  }\n};\n"
+      },
+      "id": "node-merge",
+      "name": "Merge Embedding",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/wine_inventory",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey",        "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type",  "value": "application/json" },
+            { "name": "Prefer",        "value": "resolution=merge-duplicates,return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  ct_ibottle:     $json.ct_ibottle,\n  ct_iwine:       $json.ct_iwine,\n  wine:           $json.wine,\n  vintage:        $json.vintage,\n  producer:       $json.producer,\n  wine_type:      $json.wine_type,\n  color:          $json.color,\n  varietal:       $json.varietal,\n  appellation:    $json.appellation,\n  region:         $json.region,\n  country:        $json.country,\n  locale:         $json.locale,\n  location:       $json.location,\n  bin:            $json.bin,\n  purchase_price: $json.purchase_price,\n  valuation:      $json.valuation,\n  drink_from:     $json.drink_from,\n  drink_to:       $json.drink_to,\n  ct_score:       $json.ct_score,\n  my_score:       $json.my_score,\n  my_notes:       $json.my_notes,\n  note_date:      $json.note_date,\n  removed_at:     null,\n  last_synced_at: $json.last_synced_at,\n  raw_ct_row:     $json.raw_ct_row,\n  embedding:      $json.embedding\n}) }}",
+        "options": {}
+      },
+      "id": "node-upsert",
+      "name": "Upsert → Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// After all batches complete, collect every ct_ibottle that was in today's CT export.\n// The soft-delete PATCH will mark any row NOT in this list.\nconst all = $input.all();\nconst activeBottles = [...new Set(\n  all.map(i => i.json.ct_ibottle).filter(Boolean)\n)];\nreturn [{ json: { active_bottles: activeBottles, count: activeBottles.length } }];\n"
+      },
+      "id": "node-collect",
+      "name": "Collect Active iBottle IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/soft_delete_removed_bottles",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey",        "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ active_ibottles: $json.active_bottles }) }}",
+        "options": {}
+      },
+      "id": "node-softdelete",
+      "name": "Soft-Delete Removed Bottles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const upsertCount   = $('Collect Active iBottle IDs').first().json.count;\nconst today         = new Date().toISOString().slice(0,10);\nconst summary       = `Wine inventory sync ${today}: ${upsertCount} bottles upserted/refreshed from CellarTracker. Soft-delete sweep complete.`;\nreturn [{ json: { summary } }];\n"
+      },
+      "id": "node-summary",
+      "name": "Build Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/functions/v1/open-brain-mcp",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tool: 'capture_thought', input: { content: $json.summary, type: 'log', topic: 'wine-inventory-sync' } }) }}",
+        "options": {}
+      },
+      "id": "node-brain",
+      "name": "Log to Brain",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 300]
+    }
+
+  ],
+
+  "connections": {
+    "Nightly 10pm": {
+      "main": [[
+        { "node": "Fetch CT Bottles", "type": "main", "index": 0 },
+        { "node": "Fetch CT Notes",   "type": "main", "index": 0 }
+      ]]
+    },
+    "Fetch CT Bottles": {
+      "main": [[{ "node": "Parse CSV + Merge Notes", "type": "main", "index": 0 }]]
+    },
+    "Fetch CT Notes": {
+      "main": [[{ "node": "Parse CSV + Merge Notes", "type": "main", "index": 1 }]]
+    },
+    "Parse CSV + Merge Notes": {
+      "main": [[{ "node": "Batch × 20", "type": "main", "index": 0 }]]
+    },
+    "Batch × 20": {
+      "main": [[{ "node": "OpenRouter Embedding", "type": "main", "index": 0 }]]
+    },
+    "OpenRouter Embedding": {
+      "main": [[{ "node": "Merge Embedding", "type": "main", "index": 0 }]]
+    },
+    "Merge Embedding": {
+      "main": [[{ "node": "Upsert → Supabase", "type": "main", "index": 0 }]]
+    },
+    "Upsert → Supabase": {
+      "main": [[{ "node": "Collect Active iBottle IDs", "type": "main", "index": 0 }]]
+    },
+    "Collect Active iBottle IDs": {
+      "main": [[{ "node": "Soft-Delete Removed Bottles", "type": "main", "index": 0 }]]
+    },
+    "Soft-Delete Removed Bottles": {
+      "main": [[{ "node": "Build Summary", "type": "main", "index": 0 }]]
+    },
+    "Build Summary": {
+      "main": [[{ "node": "Log to Brain", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": ["wine", "cellartracker", "supabase", "dave-brain"],
+  "triggerCount": 1
+}

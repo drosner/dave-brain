@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Cave — Wine Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & base ──────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ink:       #1a1410;
+    --ink-light: #5c4f44;
+    --paper:     #f5f0e8;
+    --cream:     #ede6d6;
+    --gold:      #b8966a;
+    --gold-dim:  #8a6d4a;
+    --red:       #7a2020;
+    --red-dim:   #5c1818;
+    --white:     #fdfaf5;
+    --shadow:    rgba(26,20,16,0.15);
+    --radius:    3px;
+    --ff-serif:  'Cormorant Garamond', Georgia, serif;
+    --ff-mono:   'DM Mono', monospace;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--ff-serif);
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── App shell ──────────────────────────────────────────────── */
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 12px;
+    background: var(--ink);
+    border-bottom: 1px solid rgba(184,150,106,0.2);
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .brand {
+    font-size: 22px;
+    font-weight: 300;
+    letter-spacing: 0.12em;
+    color: var(--gold);
+    font-style: italic;
+  }
+
+  .brand span {
+    font-style: normal;
+    font-weight: 600;
+    color: var(--paper);
+  }
+
+  /* ── Mode toggle ─────────────────────────────────────────────── */
+  .mode-toggle {
+    display: flex;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(184,150,106,0.25);
+    border-radius: 20px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .mode-btn {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    padding: 5px 12px;
+    border: none;
+    border-radius: 16px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--ink-light);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .mode-btn.active {
+    background: var(--gold);
+    color: var(--ink);
+    font-weight: 400;
+  }
+
+  /* ── Camera view ─────────────────────────────────────────────── */
+  #camera-area {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #0d0b08;
+  }
+
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* Viewfinder overlay */
+  .viewfinder {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .vf-frame {
+    width: min(70vw, 280px);
+    height: min(70vw, 280px);
+    position: relative;
+    opacity: 0.6;
+  }
+
+  .vf-corner {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-color: var(--gold);
+    border-style: solid;
+    border-width: 0;
+  }
+  .vf-corner.tl { top: 0; left: 0;  border-top-width: 2px;    border-left-width: 2px; }
+  .vf-corner.tr { top: 0; right: 0; border-top-width: 2px;    border-right-width: 2px; }
+  .vf-corner.bl { bottom: 0; left: 0;  border-bottom-width: 2px; border-left-width: 2px; }
+  .vf-corner.br { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+
+  /* Scanning animation */
+  .scan-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    top: 0;
+    animation: scan 2s ease-in-out infinite;
+    opacity: 0;
+  }
+
+  .scanning .scan-line { opacity: 1; }
+
+  @keyframes scan {
+    0%   { top: 0%;   opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
+
+  /* Multi mode hint */
+  .vf-hint {
+    position: absolute;
+    bottom: -32px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    color: var(--gold);
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+    opacity: 0.7;
+  }
+
+  /* ── Captured image with overlays ──────────────────────────── */
+  #capture-container {
+    position: absolute;
+    inset: 0;
+    display: none;
+  }
+
+  #capture-container.visible { display: block; }
+
+  #captured-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #0d0b08;
+  }
+
+  /* Bottle overlay labels */
+  .bottle-label {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    margin-top: -12px;
+    background: rgba(26,20,16,0.92);
+    border: 1px solid var(--gold);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    min-width: 100px;
+    max-width: 160px;
+    pointer-events: none;
+    animation: labelIn 0.3s ease forwards;
+    backdrop-filter: blur(4px);
+  }
+
+  @keyframes labelIn {
+    from { opacity: 0; transform: translate(-50%, -90%); }
+    to   { opacity: 1; transform: translate(-50%, -100%) translateY(-12px); }
+  }
+
+  .bottle-label .bl-price {
+    font-family: var(--ff-mono);
+    font-size: 15px;
+    color: var(--gold);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+  }
+
+  .bottle-label .bl-location {
+    font-size: 11px;
+    color: var(--paper);
+    opacity: 0.85;
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+  }
+
+  .bottle-label .bl-name {
+    font-size: 10px;
+    color: var(--ink-light);
+    margin-top: 3px;
+    font-family: var(--ff-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .bottle-label .bl-dot {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 6px;
+    height: 6px;
+    background: var(--gold);
+    border-radius: 50%;
+  }
+
+  /* Not found label */
+  .bottle-label.not-found {
+    border-color: rgba(184,150,106,0.3);
+    opacity: 0.6;
+  }
+  .bottle-label.not-found .bl-price { color: var(--ink-light); font-size: 11px; }
+
+  /* ── Bottom controls ─────────────────────────────────────────── */
+  #controls {
+    flex-shrink: 0;
+    padding: 16px 20px 28px;
+    background: var(--ink);
+    border-top: 1px solid rgba(184,150,106,0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .shutter-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+  }
+
+  .shutter-btn {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    border: 2px solid var(--gold);
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: transform 0.1s ease;
+    flex-shrink: 0;
+  }
+
+  .shutter-btn:active { transform: scale(0.94); }
+
+  .shutter-btn::after {
+    content: '';
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    background: var(--gold);
+    transition: background 0.15s ease;
+  }
+
+  .shutter-btn:disabled::after { background: var(--ink-light); }
+  .shutter-btn:disabled { border-color: var(--ink-light); cursor: not-allowed; }
+
+  .action-btn {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(184,150,106,0.4);
+    background: transparent;
+    color: var(--paper);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .action-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+  .action-btn.primary {
+    background: var(--gold);
+    border-color: var(--gold);
+    color: var(--ink);
+  }
+
+  .action-btn.primary:hover { background: var(--gold-dim); }
+  .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Loading state ───────────────────────────────────────────── */
+  #loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(26,20,16,0.85);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 50;
+    backdrop-filter: blur(4px);
+  }
+
+  #loading.visible { display: flex; }
+
+  .loading-ring {
+    width: 44px;
+    height: 44px;
+    border: 2px solid rgba(184,150,106,0.2);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--gold);
+    opacity: 0.8;
+  }
+
+  /* ── Single result panel ─────────────────────────────────────── */
+  #result-panel {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: var(--ink);
+    border-top: 1px solid rgba(184,150,106,0.3);
+    padding: 20px 20px 32px;
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 40;
+    max-height: 75vh;
+    overflow-y: auto;
+  }
+
+  #result-panel.open { transform: translateY(0); }
+
+  .result-handle {
+    width: 36px;
+    height: 3px;
+    background: rgba(184,150,106,0.3);
+    border-radius: 2px;
+    margin: 0 auto 16px;
+  }
+
+  .result-wine-name {
+    font-size: 24px;
+    font-weight: 300;
+    line-height: 1.25;
+    color: var(--paper);
+    margin-bottom: 4px;
+  }
+
+  .result-wine-name em {
+    font-style: italic;
+    color: var(--gold);
+  }
+
+  .result-vintage {
+    font-family: var(--ff-mono);
+    font-size: 13px;
+    color: var(--gold);
+    letter-spacing: 0.08em;
+    margin-bottom: 16px;
+  }
+
+  .result-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .result-field {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(184,150,106,0.15);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+
+  .result-field-label {
+    font-family: var(--ff-mono);
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--ink-light);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .result-field-value {
+    font-size: 16px;
+    font-weight: 300;
+    color: var(--paper);
+    letter-spacing: 0.02em;
+  }
+
+  .result-field.highlight { border-color: rgba(184,150,106,0.4); }
+  .result-field.highlight .result-field-value { color: var(--gold); }
+
+  .result-narrative {
+    font-size: 13px;
+    line-height: 1.7;
+    color: rgba(245,240,232,0.6);
+    font-style: italic;
+    border-left: 2px solid rgba(184,150,106,0.3);
+    padding-left: 12px;
+    margin-top: 8px;
+  }
+
+  .result-not-in-cellar {
+    text-align: center;
+    padding: 20px;
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--ink-light);
+    letter-spacing: 0.08em;
+  }
+
+  .vision-confidence {
+    font-family: var(--ff-mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    padding: 3px 7px;
+    border-radius: 10px;
+    background: rgba(184,150,106,0.12);
+    color: var(--gold-dim);
+    display: inline-block;
+    margin-bottom: 14px;
+  }
+
+  /* ── Error toast ─────────────────────────────────────────────── */
+  #toast {
+    position: absolute;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-10px);
+    background: var(--red);
+    color: var(--paper);
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+  }
+
+  #toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ── Multi mode count badge ──────────────────────────────────── */
+  .bottle-count-badge {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: var(--gold);
+    color: var(--ink);
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    font-weight: 400;
+    padding: 4px 10px;
+    border-radius: 10px;
+    pointer-events: none;
+    display: none;
+  }
+
+  /* ── Retake overlay button ───────────────────────────────────── */
+  .retake-overlay {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(26,20,16,0.7);
+    border: 1px solid rgba(184,150,106,0.3);
+    color: var(--paper);
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    display: none;
+  }
+
+  .retake-overlay.visible { display: block; }
+
+  /* ── No camera fallback ──────────────────────────────────────── */
+  .upload-fallback {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    color: var(--ink-light);
+  }
+
+  .upload-fallback label {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    border: 1px dashed rgba(184,150,106,0.4);
+    padding: 20px 32px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    color: var(--gold);
+    transition: border-color 0.2s;
+  }
+
+  .upload-fallback label:hover { border-color: var(--gold); }
+  #file-input { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header>
+    <div class="brand"><em>cave</em> <span>/</span> scanner</div>
+    <div class="mode-toggle">
+      <button class="mode-btn active" data-mode="single" onclick="setMode('single')">SINGLE</button>
+      <button class="mode-btn" data-mode="multi" onclick="setMode('multi')">SHELF</button>
+    </div>
+  </header>
+
+  <!-- Camera area -->
+  <div id="camera-area">
+    <video id="video" autoplay playsinline muted></video>
+
+    <!-- Viewfinder -->
+    <div class="viewfinder" id="viewfinder">
+      <div class="vf-frame" id="vf-frame">
+        <div class="vf-corner tl"></div>
+        <div class="vf-corner tr"></div>
+        <div class="vf-corner bl"></div>
+        <div class="vf-corner br"></div>
+        <div class="scan-line" id="scan-line"></div>
+        <div class="vf-hint" id="vf-hint">POINT AT LABEL OR BARCODE</div>
+      </div>
+    </div>
+
+    <!-- Captured image + overlays -->
+    <div id="capture-container">
+      <img id="captured-img" alt="captured">
+      <div id="overlays"></div>
+      <div class="bottle-count-badge" id="bottle-count"></div>
+      <button class="retake-overlay" id="retake-btn" onclick="retake()">↩ RETAKE</button>
+    </div>
+
+    <!-- Loading -->
+    <div id="loading">
+      <div class="loading-ring"></div>
+      <div class="loading-text" id="loading-text">IDENTIFYING WINE…</div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls">
+    <div class="shutter-row">
+      <button class="action-btn" onclick="triggerUpload()" title="Upload photo">
+        UPLOAD
+      </button>
+      <button class="shutter-btn" id="shutter" onclick="capture()" title="Capture"></button>
+      <button class="action-btn" id="flip-btn" onclick="flipCamera()">
+        FLIP
+      </button>
+    </div>
+  </div>
+
+  <!-- Single result panel (slides up) -->
+  <div id="result-panel">
+    <div class="result-handle"></div>
+    <div id="result-content"></div>
+  </div>
+
+  <!-- Error toast -->
+  <div id="toast"></div>
+
+  <!-- Hidden file input -->
+  <input type="file" id="file-input" accept="image/*" onchange="handleFileUpload(event)">
+  <!-- Hidden canvas for capture -->
+  <canvas id="canvas" style="display:none"></canvas>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let mode       = 'single';   // 'single' | 'multi'
+let stream     = null;
+let facingMode = 'environment'; // rear camera by default
+let captured   = false;
+
+// ── Camera init ────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); }
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    const video = document.getElementById('video');
+    video.srcObject = stream;
+    video.style.display = 'block';
+    document.getElementById('shutter').disabled = false;
+  } catch (err) {
+    console.warn('Camera unavailable:', err.message);
+    // Show file upload fallback
+    const camArea = document.getElementById('camera-area');
+    document.getElementById('video').style.display = 'none';
+    document.getElementById('viewfinder').style.display = 'none';
+    if (!camArea.querySelector('.upload-fallback')) {
+      camArea.innerHTML += `
+        <div class="upload-fallback">
+          <label for="file-input">TAP TO SELECT PHOTO</label>
+        </div>`;
+    }
+    document.getElementById('shutter').disabled = true;
+  }
+}
+
+function flipCamera() {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  startCamera();
+}
+
+// ── Mode switch ────────────────────────────────────────────────────────────
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === m);
+  });
+  // Update viewfinder hint
+  const hint = document.getElementById('vf-hint');
+  const frame = document.getElementById('vf-frame');
+  if (m === 'multi') {
+    hint.textContent = 'FRAME YOUR SHELF OR RACK';
+    frame.style.width  = 'min(90vw, 360px)';
+    frame.style.height = 'min(60vw, 240px)';
+  } else {
+    hint.textContent = 'POINT AT LABEL OR BARCODE';
+    frame.style.width  = '';
+    frame.style.height = '';
+  }
+  retake();
+}
+
+// ── Capture ────────────────────────────────────────────────────────────────
+async function capture() {
+  const video  = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  const dataUrl  = canvas.toDataURL('image/jpeg', 0.92);
+  const base64   = dataUrl.split(',')[1];
+  await processImage(base64, 'image/jpeg', dataUrl);
+}
+
+function triggerUpload() {
+  document.getElementById('file-input').click();
+}
+
+async function handleFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async ev => {
+    const dataUrl = ev.target.result;
+    const base64  = dataUrl.split(',')[1];
+    await processImage(base64, file.type || 'image/jpeg', dataUrl);
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+
+async function processImage(base64, mediaType, dataUrl) {
+  // Show captured image
+  const container = document.getElementById('capture-container');
+  const img       = document.getElementById('captured-img');
+  img.src = dataUrl;
+  container.classList.add('visible');
+  document.getElementById('retake-btn').classList.add('visible');
+  captured = true;
+
+  // Hide viewfinder, show loading
+  document.getElementById('viewfinder').style.display = 'none';
+  setLoading(true, mode === 'multi' ? 'SCANNING SHELF…' : 'IDENTIFYING WINE…');
+  document.getElementById('result-panel').classList.remove('open');
+  document.getElementById('overlays').innerHTML = '';
+  document.getElementById('bottle-count').style.display = 'none';
+
+  try {
+    if (mode === 'single') {
+      await runSingleScan(base64, mediaType);
+    } else {
+      await runMultiScan(base64, mediaType);
+    }
+  } catch (err) {
+    setLoading(false);
+    showToast('Error: ' + err.message);
+  }
+}
+
+// ── Single scan ────────────────────────────────────────────────────────────
+async function runSingleScan(base64, mediaType) {
+  setLoading(true, 'IDENTIFYING WINE…');
+
+  const res = await fetch('/api/scan-single', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64, mediaType }),
+  });
+
+  if (!res.ok) throw new Error(`Server error ${res.status}`);
+  const data = await res.json();
+
+  setLoading(false);
+  document.getElementById('scan-line').style.animation = 'none';
+  renderSingleResult(data);
+}
+
+function renderSingleResult({ vision, inventory }) {
+  const panel   = document.getElementById('result-panel');
+  const content = document.getElementById('result-content');
+
+  if (!vision || vision.confidence === 'low') {
+    content.innerHTML = `
+      <div class="result-not-in-cellar">
+        <div style="font-size:32px;margin-bottom:8px">?</div>
+        WINE NOT IDENTIFIED<br>
+        <span style="opacity:0.5">Try a clearer photo of the label</span>
+      </div>`;
+    panel.classList.add('open');
+    return;
+  }
+
+  const wineName  = inventory?.wine  || vision.wine_name || 'Unknown Wine';
+  const vintage   = inventory?.vintage || vision.vintage  || '';
+  const location  = inventory?.location || '—';
+  const bin       = inventory?.bin;
+  const price     = inventory?.purchase_price ? `$${inventory.purchase_price}` : '—';
+  const drinkFrom = inventory?.drink_from;
+  const drinkTo   = inventory?.drink_to;
+  const ctScore   = inventory?.ct_score;
+  const narrative = inventory?.sommselect_narrative || inventory?.my_notes;
+
+  const locationStr = bin ? `${location} / ${bin}` : location;
+  const drinkStr    = drinkFrom && drinkTo ? `${drinkFrom} – ${drinkTo}` : '—';
+
+  content.innerHTML = `
+    <div class="vision-confidence">VISION ${(vision.confidence || 'medium').toUpperCase()}</div>
+    <div class="result-wine-name">${escHtml(wineName)}</div>
+    <div class="result-vintage">${vintage || '&nbsp;'}</div>
+
+    <div class="result-grid">
+      <div class="result-field highlight" style="grid-column:1/-1">
+        <div class="result-field-label">Location</div>
+        <div class="result-field-value">${escHtml(locationStr)}</div>
+      </div>
+      <div class="result-field ${price !== '—' ? 'highlight' : ''}">
+        <div class="result-field-label">Paid</div>
+        <div class="result-field-value">${escHtml(price)}</div>
+      </div>
+      <div class="result-field">
+        <div class="result-field-label">Drink</div>
+        <div class="result-field-value">${escHtml(drinkStr)}</div>
+      </div>
+      ${ctScore ? `
+      <div class="result-field">
+        <div class="result-field-label">CT Score</div>
+        <div class="result-field-value">${ctScore}</div>
+      </div>` : ''}
+      ${vision.region ? `
+      <div class="result-field">
+        <div class="result-field-label">Region</div>
+        <div class="result-field-value">${escHtml(vision.region)}</div>
+      </div>` : ''}
+    </div>
+
+    ${!inventory ? `<div class="result-not-in-cellar" style="margin-bottom:12px">NOT IN CURRENT INVENTORY</div>` : ''}
+
+    ${narrative ? `
+    <div class="result-narrative">${escHtml(narrative.substring(0, 320))}${narrative.length > 320 ? '…' : ''}</div>
+    ` : ''}
+  `;
+
+  panel.classList.add('open');
+}
+
+// ── Multi scan ─────────────────────────────────────────────────────────────
+async function runMultiScan(base64, mediaType) {
+  setLoading(true, 'SCANNING SHELF…');
+
+  const res = await fetch('/api/scan-multi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64, mediaType }),
+  });
+
+  if (!res.ok) throw new Error(`Server error ${res.status}`);
+  const data = await res.json();
+
+  setLoading(false);
+  renderMultiOverlays(data.bottles || []);
+}
+
+function renderMultiOverlays(bottles) {
+  const overlays  = document.getElementById('overlays');
+  const badge     = document.getElementById('bottle-count');
+  const container = document.getElementById('capture-container');
+
+  if (bottles.length === 0) {
+    showToast('No bottles detected — try a clearer shot');
+    return;
+  }
+
+  badge.textContent = `${bottles.length} BOTTLE${bottles.length > 1 ? 'S' : ''}`;
+  badge.style.display = 'block';
+
+  // Wait for image to load so we have natural dimensions
+  const img = document.getElementById('captured-img');
+  const placeLabels = () => {
+    overlays.innerHTML = '';
+
+    bottles.forEach((bottle, i) => {
+      const pos    = bottle.position || { x: 50, y: 50 };
+      const label  = bottle.label;
+      const found  = !!label?.price || !!label?.location;
+
+      const el = document.createElement('div');
+      el.className = `bottle-label ${found ? '' : 'not-found'}`;
+      el.style.left = `${pos.x}%`;
+      el.style.top  = `${pos.y}%`;
+      el.style.animationDelay = `${i * 0.08}s`;
+
+      const locationStr = label?.bin
+        ? `${label.location} / ${label.bin}`
+        : label?.location || '—';
+
+      el.innerHTML = found ? `
+        <div class="bl-price">${label.price || '—'}</div>
+        <div class="bl-location">${escHtml(locationStr)}</div>
+        <div class="bl-name">${escHtml((bottle.wine_name || '').substring(0,22))}</div>
+        <div class="bl-dot"></div>
+      ` : `
+        <div class="bl-price">NOT FOUND</div>
+        <div class="bl-name">${escHtml((bottle.wine_name || 'Unknown').substring(0,22))}</div>
+        <div class="bl-dot"></div>
+      `;
+
+      overlays.appendChild(el);
+    });
+  };
+
+  if (img.complete) placeLabels();
+  else img.onload = placeLabels;
+}
+
+// ── Retake ─────────────────────────────────────────────────────────────────
+function retake() {
+  document.getElementById('capture-container').classList.remove('visible');
+  document.getElementById('retake-btn').classList.remove('visible');
+  document.getElementById('result-panel').classList.remove('open');
+  document.getElementById('viewfinder').style.display = 'flex';
+  document.getElementById('overlays').innerHTML = '';
+  document.getElementById('bottle-count').style.display = 'none';
+  document.getElementById('captured-img').src = '';
+  captured = false;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function setLoading(show, text = 'WORKING…') {
+  const el = document.getElementById('loading');
+  el.classList.toggle('visible', show);
+  if (text) document.getElementById('loading-text').textContent = text;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function escHtml(str) {
+  if (!str && str !== 0) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// ── Scanning animation on viewfinder ──────────────────────────────────────
+// Pulse the scan line while live camera is showing
+setInterval(() => {
+  const vf = document.getElementById('vf-frame');
+  if (!captured) {
+    vf.classList.add('scanning');
+    setTimeout(() => vf.classList.remove('scanning'), 2000);
+  }
+}, 3500);
+
+// ── Init ───────────────────────────────────────────────────────────────────
+startCamera();
+</script>
+</body>
+</html>
