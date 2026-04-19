@@ -1,5 +1,7 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { StreamableHTTPTransport } from '@hono/mcp';
 import { createClient } from '@supabase/supabase-js';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -7,8 +9,15 @@ import { z } from 'zod';
 const app = new Hono();
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabaseServiceRoleKey =
+  Deno.env.get('WINE_BRAIN_SUPABASE_SERVICE_ROLE_KEY') ??
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
+  Deno.env.get('SUPABASE_ANON_KEY');
 const mcpBearerToken = Deno.env.get('MCP_BEARER_TOKEN');
+
+if (!supabaseServiceRoleKey) {
+  throw new Error('Missing Supabase key for wine-brain-mcp');
+}
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   auth: { persistSession: false },
@@ -345,13 +354,11 @@ function buildServer() {
   return server;
 }
 
-app.all('/mcp', async (c) => {
+app.all('*', async (c) => {
   const server = buildServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
+  const transport = new StreamableHTTPTransport();
   await server.connect(transport);
-  return transport.handleRequest(c.req.raw);
+  return transport.handleRequest(c);
 });
 
 Deno.serve(app.fetch);
