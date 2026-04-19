@@ -11,6 +11,9 @@ You will need about 30 minutes and the three files that came with this guide:
 
 ---
 
+https://www.cellartracker.com/xlquery.asp?User=DaveInPA&Password=rosner9698&Format=csv&Table=Bottles&BottleState=1
+
+
 ## PART 1 — Set up the Supabase database (10 minutes)
 
 These steps run two SQL files in your existing Supabase project (the same one
