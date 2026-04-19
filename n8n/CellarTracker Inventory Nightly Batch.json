@@ -1,16 +1,4 @@
 {
-  "pinData": {},
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate"
-  },
-  "versionId": "5bedf698-3e95-4b24-8d07-7d8afbd99243",
-  "meta": {
-    "instanceId": "215a72f9a4e5407ab46d43679bb814e727e8d4d7e5a8e7d9f750580f9f768d59"
-  },
-  "id": "6oLrw8Fk2BPA6esN",
-  "tags": [],
   "name": "CellarTracker Inventory Nightly Batch v2",
   "nodes": [
     {
@@ -24,13 +12,13 @@
           ]
         }
       },
-      "id": "5407a47b-62fc-4562-8e7c-f01996d5de90",
+      "id": "e6fe0718-7ff2-4e68-91b0-305e2e527a24",
       "name": "Nightly 10pm",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.1,
       "position": [
-        -240,
-        128
+        -176,
+        16
       ],
       "webhookId": ""
     },
@@ -71,13 +59,13 @@
           "timeout": 60000
         }
       },
-      "id": "9ea76c8f-f7fe-4495-95b8-4f1f92780c79",
+      "id": "eab4263e-65d6-4aa3-b4c2-d714b08e6e7b",
       "name": "Fetch CT Bottles",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        0,
-        0
+        64,
+        -112
       ]
     },
     {
@@ -113,52 +101,52 @@
           "timeout": 60000
         }
       },
-      "id": "8011f659-803c-4997-aa88-58e80ec29513",
+      "id": "a7b9fb27-7f40-4569-9b47-ce4e20cf0e3e",
       "name": "Fetch CT Notes",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        0,
-        240
+        64,
+        128
       ]
     },
     {
       "parameters": {
         "jsCode": "\nfunction parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n  while (i < text.length) {\n    const ch = text[i];\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') { field += '\"'; i += 2; continue; }\n        inQuotes = false; i += 1; continue;\n      }\n      field += ch; i += 1; continue;\n    }\n    if (ch === '\"') { inQuotes = true; i += 1; continue; }\n    if (ch === ',') { row.push(field); field = ''; i += 1; continue; }\n    if (ch === '\\n') { row.push(field); field = ''; rows.push(row); row = []; i += 1; continue; }\n    field += ch; i += 1;\n  }\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (!rows.length) return [];\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows.slice(1).filter(r => r.some(v => String(v || '').trim() !== '')).map(r => {\n    const obj = {};\n    header.forEach((h, idx) => { obj[h] = r[idx] ?? ''; });\n    return obj;\n  });\n}\n\nconst allInputs = $input.all();\nconst bottlesRaw = allInputs[0]?.json?.data || '';\nconst notesRaw = allInputs[1]?.json?.data || '';\nif (!String(bottlesRaw).trim()) throw new Error('Bottles CSV input is empty');\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = String(n.iWine || n.iwine || '').trim();\n  if (!id) continue;\n  if (!notesByWine[id]) notesByWine[id] = { texts: [], latestDate: null };\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate ? new Date(notesByWine[id].latestDate) : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\nconst toDate = (v) => {\n  const s = toStr(v);\n  if (!s) return null;\n  const d = new Date(s);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);\n};\n\nconst output = [];\nfor (const row of bottles) {\n  const ct_barcode = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n  if (!ct_barcode || !ct_iwine) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n  const noteData = notesByWine[String(ct_iwine)] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n  const embeddingParts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Varietal),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    my_notes ? `Tasting notes: ${my_notes}` : null,\n  ].filter(Boolean);\n  output.push({ json: {\n    ct_barcode,\n    ct_iwine,\n    bottle_state: toStr(row.BottleState),\n    wine: toStr(row.Wine),\n    vintage: toInt(row.Vintage),\n    producer: toStr(row.Producer),\n    wine_type: toStr(row.Type),\n    varietal: toStr(row.Varietal),\n    master_varietal: toStr(row.MasterVarietal),\n    designation: toStr(row.Designation),\n    vineyard: toStr(row.Vineyard),\n    appellation: toStr(row.Appellation),\n    region: toStr(row.Region),\n    sub_region: toStr(row.SubRegion),\n    country: toStr(row.Country),\n    locale: toStr(row.Locale),\n    bottle_size: toStr(row.BottleSize),\n    drink_from: toInt(row.BeginConsume),\n    drink_to: toInt(row.EndConsume),\n    my_notes,\n    note_date: noteData.latestDate ? toDate(noteData.latestDate) : null,\n    location: toStr(row.Location),\n    bin: toStr(row.Bin),\n    store: toStr(row.Store),\n    purchase_date: toDate(row.PurchaseDate),\n    delivery_date: toDate(row.DeliveryDate),\n    bottle_cost: toFloat(row.BottleCost),\n    bottle_cost_currency: toStr(row.BottleCostCurrency),\n    bottle_note: toStr(row.BottleNote),\n    purchase_note: toStr(row.PurchaseNote),\n    consumption_date: toDate(row.ConsumptionDate),\n    consumption_type: toStr(row.ConsumptionType),\n    consumption_note: toStr(row.ConsumptionNote),\n    consumption_revenue: toFloat(row.ConsumptionRevenue),\n    consumption_revenue_currency: toStr(row.ConsumptionRevenueCurrency),\n    removed_at: null,\n    last_synced_at: new Date().toISOString(),\n    raw_ct_row: row,\n    embedding_text: embeddingParts.join('. '),\n  }});\n}\nreturn output;\n"
       },
-      "id": "23c15c76-2872-40bf-b0dc-baa092c2191a",
+      "id": "e281423a-f049-43a4-94a5-79a2843dfccb",
       "name": "Parse CSV + Merge Notes",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        272,
-        128
+        288,
+        -192
       ]
     },
     {
       "parameters": {
         "jsCode": "\nconst items = $input.all();\nconst activeBarcodes = Array.from(new Set(items.map(i => i.json.ct_barcode).filter(Boolean)));\nreturn [{ json: { active_barcodes: activeBarcodes, count: activeBarcodes.length } }];\n"
       },
-      "id": "70f3c8b7-2331-4a4b-89a1-43595e281164",
+      "id": "057e0b23-9a89-4a8a-bd76-7b6ea6929960",
       "name": "Collect Active Barcodes",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        480,
-        480
+        544,
+        368
       ]
     },
     {
       "parameters": {
         "jsCode": "\nconst items = $input.all();\nif (!items.length) return [];\nconst byWine = new Map();\nfor (const item of items) {\n  const row = item.json;\n  if (!row.ct_iwine) continue;\n  if (!byWine.has(row.ct_iwine)) {\n    byWine.set(row.ct_iwine, {\n      ct_iwine: row.ct_iwine,\n      wine: row.wine,\n      vintage: row.vintage,\n      producer: row.producer,\n      wine_type: row.wine_type,\n      varietal: row.varietal,\n      master_varietal: row.master_varietal,\n      designation: row.designation,\n      vineyard: row.vineyard,\n      appellation: row.appellation,\n      region: row.region,\n      sub_region: row.sub_region,\n      country: row.country,\n      locale: row.locale,\n      bottle_size: row.bottle_size,\n      drink_from: row.drink_from,\n      drink_to: row.drink_to,\n      my_notes: row.my_notes,\n      note_date: row.note_date,\n      embedding_text: row.embedding_text || ''\n    });\n  }\n}\nconst source_items = Array.from(byWine.values());\nreturn [{ json: {\n  batch_count: source_items.length,\n  source_items,\n  request_body: { model: 'openai/text-embedding-3-small', input: source_items.map(i => i.embedding_text || '') }\n}}];\n"
       },
-      "id": "9f07f931-d745-40fd-9287-239ba415fb49",
+      "id": "f495572f-7461-460d-8839-3cd687d4ecfa",
       "name": "Build Wine Embedding Batch Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        624,
-        96
+        496,
+        -192
       ]
     },
     {
@@ -185,39 +173,39 @@
           "timeout": 60000
         }
       },
-      "id": "e8cd9803-07e7-49ab-b691-a9b589148dbb",
+      "id": "9e4d1085-7cf6-4003-bf13-f2c8416694cb",
       "name": "OpenRouter Embedding Batch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        864,
-        96
+        752,
+        -176
       ]
     },
     {
       "parameters": {
         "jsCode": "\nconst resp = $json;\nconst prep = $('Build Wine Embedding Batch Request').first().json;\nconst sourceItems = prep.source_items || [];\nconst data = Array.isArray(resp.data) ? resp.data : [];\nif (data.length !== sourceItems.length) {\n  throw new Error(`Embedding count mismatch. Expected ${sourceItems.length}, got ${data.length}`);\n}\nreturn sourceItems.map((wine, idx) => {\n  const embedding = data[idx]?.embedding;\n  if (!Array.isArray(embedding)) throw new Error(`Missing embedding for batch index ${idx}`);\n  return { json: { ...wine, embedding: '[' + embedding.join(',') + ']' } };\n});\n"
       },
-      "id": "e493063c-9340-4367-8027-96a8259f1a7f",
+      "id": "2f64bac3-9361-419e-822a-651a2f941abb",
       "name": "Apply Embeddings to Batch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1088,
-        96
+        1008,
+        -176
       ]
     },
     {
       "parameters": {
         "jsCode": "const rows = $input.all().map(i => ({\n  ct_iwine: i.json.ct_iwine,\n  wine: i.json.wine,\n  vintage: i.json.vintage,\n  producer: i.json.producer,\n  wine_type: i.json.wine_type,\n  varietal: i.json.varietal,\n  master_varietal: i.json.master_varietal,\n  designation: i.json.designation,\n  vineyard: i.json.vineyard,\n  appellation: i.json.appellation,\n  region: i.json.region,\n  sub_region: i.json.sub_region,\n  country: i.json.country,\n  locale: i.json.locale,\n  bottle_size: i.json.bottle_size,\n  drink_from: i.json.drink_from,\n  drink_to: i.json.drink_to,\n  my_notes: i.json.my_notes,\n  note_date: i.json.note_date,\n  embedding: i.json.embedding\n}));\nreturn [{ json: { rows, count: rows.length } }];"
       },
-      "id": "06637b80-604a-43d8-9c23-fb32213c9ab1",
+      "id": "58cc9439-e8e2-4971-b0bf-8983e86c0333",
       "name": "Build Wines Upsert Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         1280,
-        96
+        -176
       ]
     },
     {
@@ -261,26 +249,26 @@
           "timeout": 60000
         }
       },
-      "id": "85b96bc1-01b1-46f9-b43c-37d9c51447be",
+      "id": "3c1edb44-2ff0-4d71-9e45-73d3c73f1a8a",
       "name": "Upsert Wines Batch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1472,
-        96
+        1520,
+        -176
       ]
     },
     {
       "parameters": {
         "jsCode": "const rows = $('Parse CSV + Merge Notes').all().map(i => ({\n  ct_barcode: i.json.ct_barcode,\n  ct_iwine: i.json.ct_iwine,\n  bottle_state: i.json.bottle_state,\n  location: i.json.location,\n  bin: i.json.bin,\n  store: i.json.store,\n  purchase_date: i.json.purchase_date,\n  delivery_date: i.json.delivery_date,\n  bottle_cost: i.json.bottle_cost,\n  bottle_cost_currency: i.json.bottle_cost_currency,\n  bottle_note: i.json.bottle_note,\n  purchase_note: i.json.purchase_note,\n  consumption_date: i.json.consumption_date,\n  consumption_type: i.json.consumption_type,\n  consumption_note: i.json.consumption_note,\n  consumption_revenue: i.json.consumption_revenue,\n  consumption_revenue_currency: i.json.consumption_revenue_currency,\n  removed_at: null,\n  last_synced_at: i.json.last_synced_at,\n  raw_ct_row: i.json.raw_ct_row\n}));\nreturn [{ json: { rows, count: rows.length } }];"
       },
-      "id": "06637b80-604a-43d8-9c23-fb32213c9ab1",
+      "id": "69eea35d-2e1d-49e3-91a1-940f0ee776d4",
       "name": "Build Bottles Upsert Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1280,
-        96
+        1712,
+        -160
       ]
     },
     {
@@ -324,13 +312,13 @@
           "timeout": 60000
         }
       },
-      "id": "85b96bc1-01b1-46f9-b43c-37d9c51447be",
+      "id": "9fcf325e-20ed-4099-a551-40bfa35a5d68",
       "name": "Upsert Bottles Batch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1472,
-        96
+        896,
+        176
       ]
     },
     {
@@ -361,13 +349,13 @@
           "timeout": 60000
         }
       },
-      "id": "a24bd202-4817-4ff1-90c2-2a41ba1b2915",
+      "id": "32e9b7e4-655a-4b9a-8475-34d2fc8403e5",
       "name": "Soft-Delete Removed Bottles by Barcode",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        736,
-        480
+        832,
+        368
       ]
     },
     {
@@ -398,29 +386,30 @@
           "timeout": 60000
         }
       },
-      "id": "acb3aa25-cb3d-4a53-acf1-39d46f831705",
+      "id": "d214ebe3-d2af-4e2e-98f9-f8ea2c3d1549",
       "name": "Infer Preferences from Purchases",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1696,
-        96
+        1296,
+        176
       ]
     },
     {
       "parameters": {
         "jsCode": "const wineCount = $('Build Wines Upsert Payload').first().json.count || 0;\nconst bottleCount = $('Build Bottles Upsert Payload').first().json.count || 0;\nconst today = new Date().toISOString().slice(0, 10);\nconst summary = 'Wine inventory sync ' + today + ': ' + wineCount + ' wines and ' + bottleCount + ' bottles synced from CellarTracker. Soft-delete and purchase preference inference complete.';\nreturn [{ json: { summary } }];"
       },
-      "id": "e5ae4012-815c-46c2-955f-d0f659a83270",
+      "id": "f9c0bbea-7ba2-4fa6-b208-cda994515260",
       "name": "Build Summary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1216,
-        368
+        1536,
+        176
       ]
     }
   ],
+  "pinData": {},
   "connections": {
     "Nightly 10pm": {
       "main": [
@@ -449,25 +438,9 @@
         ]
       ]
     },
-    "Fetch CT Notes": {
-      "main": [
-        [
-          {
-            "node": "Parse CSV + Merge Notes",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
     "Parse CSV + Merge Notes": {
       "main": [
         [
-          {
-            "node": "Collect Active Barcodes",
-            "type": "main",
-            "index": 0
-          },
           {
             "node": "Build Wine Embedding Batch Request",
             "type": "main",
@@ -546,33 +519,16 @@
       "main": [
         [
           {
-            "node": "Soft-Delete Removed Bottles by Barcode",
+            "node": "Infer Preferences from Purchases",
             "type": "main",
             "index": 0
-          }
-        ]
-      ]
-    },
-    "Collect Active Barcodes": {
-      "main": [
-        [
-          {
-            "node": "Soft-Delete Removed Bottles by Barcode",
-            "type": "main",
-            "index": 1
           }
         ]
       ]
     },
     "Soft-Delete Removed Bottles by Barcode": {
       "main": [
-        [
-          {
-            "node": "Infer Preferences from Purchases",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     },
     "Infer Preferences from Purchases": {
@@ -586,5 +542,16 @@
         ]
       ]
     }
-  }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1d43b477-1b74-44ff-93d0-c88954bd77fe",
+  "meta": {
+    "instanceId": "215a72f9a4e5407ab46d43679bb814e727e8d4d7e5a8e7d9f750580f9f768d59"
+  },
+  "id": "3FgfNS92zcQ27UaB",
+  "tags": []
 }
