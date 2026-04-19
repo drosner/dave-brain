@@ -139,3 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_wine_preferences_confidence ON wine_preferences (
 CREATE INDEX IF NOT EXISTS idx_wine_preferences_embedding
   ON wine_preferences USING ivfflat (embedding vector_cosine_ops)
   WITH (lists = 50);
+
+ALTER TABLE wine_inventory
+  ADD COLUMN IF NOT EXISTS purchase_price numeric,
+  ADD COLUMN IF NOT EXISTS ct_avg_price numeric;

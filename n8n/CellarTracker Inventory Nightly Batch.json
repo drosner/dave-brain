@@ -1,0 +1,488 @@
+{
+  "name": "CellarTracker → Supabase Wine Inventory (Nightly) - Single Embedding Batch",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
+            }
+          ]
+        }
+      },
+      "id": "5407a47b-62fc-4562-8e7c-f01996d5de90",
+      "name": "Nightly 10pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -240,
+        128
+      ],
+      "webhookId": ""
+    },
+    {
+      "parameters": {
+        "url": "https://www.cellartracker.com/xlquery.asp",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "User",
+              "value": "={{ $env.CT_USER }}"
+            },
+            {
+              "name": "Password",
+              "value": "={{ $env.CT_PASSWORD }}"
+            },
+            {
+              "name": "Format",
+              "value": "csv"
+            },
+            {
+              "name": "Table",
+              "value": "Bottles"
+            },
+            {
+              "name": "BottleState",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "9ea76c8f-f7fe-4495-95b8-4f1f92780c79",
+      "name": "Fetch CT Bottles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.cellartracker.com/xlquery.asp",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "User",
+              "value": "={{ $env.CT_USER }}"
+            },
+            {
+              "name": "Password",
+              "value": "={{ $env.CT_PASSWORD }}"
+            },
+            {
+              "name": "Format",
+              "value": "csv"
+            },
+            {
+              "name": "Table",
+              "value": "Notes"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "8011f659-803c-4997-aa88-58e80ec29513",
+      "name": "Fetch CT Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n\n  while (i < text.length) {\n    const ch = text[i];\n\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') {\n          field += '\"';\n          i += 2;\n          continue;\n        }\n        inQuotes = false;\n        i += 1;\n        continue;\n      }\n      field += ch;\n      i += 1;\n      continue;\n    }\n\n    if (ch === '\"') {\n      inQuotes = true;\n      i += 1;\n      continue;\n    }\n\n    if (ch === ',') {\n      row.push(field);\n      field = '';\n      i += 1;\n      continue;\n    }\n\n    if (ch === '\\n') {\n      row.push(field);\n      field = '';\n      rows.push(row);\n      row = [];\n      i += 1;\n      continue;\n    }\n\n    field += ch;\n    i += 1;\n  }\n\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (rows.length === 0) return [];\n\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows.slice(1)\n    .filter(r => r.some(v => String(v || '').trim() !== ''))\n    .map(r => {\n      const obj = {};\n      header.forEach((h, idx) => {\n        obj[h] = r[idx] ?? '';\n      });\n      return obj;\n    });\n}\n\nconst allInputs = $input.all();\nconst bottlesRaw = allInputs[0]?.json?.data || '';\nconst notesRaw = allInputs[1]?.json?.data || '';\n\nif (!bottlesRaw || !String(bottlesRaw).trim()) {\n  throw new Error('Bottles CSV input is empty');\n}\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\n\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = (n.iWine || n.iwine || '').toString().trim();\n  if (!id) continue;\n\n  if (!notesByWine[id]) {\n    notesByWine[id] = { texts: [], latestDate: null };\n  }\n\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate ? new Date(notesByWine[id].latestDate) : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\n\nconst output = [];\n\nfor (const row of bottles) {\n  const ct_ibottle = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n\n  if (!ct_ibottle) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n\n  const noteData = notesByWine[String(ct_iwine || '')] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n\n  const parts = [\n    toStr(row.Wine),\n    (toInt(row.Vintage) && String(row.Vintage) !== '0') ? ('Vintage ' + row.Vintage) : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Color),\n    toStr(row.Category),\n    toStr(row.Locale),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    toStr(row.Location) ? ('Location: ' + row.Location) : null,\n    toStr(row.Bin) ? ('Bin: ' + row.Bin) : null,\n    (toInt(row.BeginConsume) && toInt(row.EndConsume)) ? ('Drink ' + row.BeginConsume + '-' + row.EndConsume) : null,\n    (toFloat(row.CT) != null) ? ('CellarTracker score ' + row.CT) : null,\n    (toFloat(row.MyScore) != null) ? ('My score ' + row.MyScore) : null,\n    (toFloat(row.PurchasePrice) != null) ? ('Purchased at $' + row.PurchasePrice) : null,\n    my_notes ? ('Tasting notes: ' + my_notes) : null\n  ].filter(Boolean);\n\n  output.push({\n    json: {\n      ct_ibottle,\n      ct_barcode: ct_ibottle,\n      ct_iwine,\n      wine: toStr(row.Wine),\n      vintage: toInt(row.Vintage),\n      producer: toStr(row.Producer),\n      wine_type: toStr(row.Type),\n      color: toStr(row.Color),\n      varietal: toStr(row.Category),\n      appellation: toStr(row.Appellation),\n      region: toStr(row.Region),\n      country: toStr(row.Country),\n      locale: toStr(row.Locale),\n      location: toStr(row.Location),\n      bin: toStr(row.Bin),\n      purchase_price: toFloat(row.PurchasePrice),\n      valuation: toFloat(row.Valuation),\n      drink_from: toInt(row.BeginConsume),\n      drink_to: toInt(row.EndConsume),\n      ct_score: toFloat(row.CT),\n      my_score: toFloat(row.MyScore),\n      my_notes,\n      note_date: noteData.latestDate || null,\n      removed_at: null,\n      last_synced_at: new Date().toISOString(),\n      raw_ct_row: JSON.stringify(row),\n      embedding_text: parts.join('. ')\n    }\n  });\n}\n\nreturn output;\n"
+      },
+      "id": "23c15c76-2872-40bf-b0dc-baa092c2191a",
+      "name": "Parse CSV + Merge Notes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\nconst activeBottles = Array.from(new Set(\n  items.map(i => i.json.ct_ibottle).filter(Boolean)\n));\nreturn [{\n  json: {\n    active_bottles: activeBottles,\n    count: activeBottles.length\n  }\n}];\n"
+      },
+      "id": "70f3c8b7-2331-4a4b-89a1-43595e281164",
+      "name": "Collect Active iBottle IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\nif (!items.length) return [];\n\nconst source_items = items.map(i => i.json);\nconst input = source_items.map(i => i.embedding_text || '');\n\nreturn [{\n  json: {\n    batch_count: source_items.length,\n    source_items,\n    request_body: {\n      model: 'openai/text-embedding-3-small',\n      input\n    }\n  }\n}];\n"
+      },
+      "id": "9f07f931-d745-40fd-9287-239ba415fb49",
+      "name": "Build Embedding Batch Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request_body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e8cd9803-07e7-49ab-b691-a9b589148dbb",
+      "name": "OpenRouter Embedding Batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        864,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst resp = $json;\nconst prep = $('Build Embedding Batch Request').first().json;\nconst sourceItems = prep.source_items || [];\nconst data = Array.isArray(resp.data) ? resp.data : [];\n\nif (data.length !== sourceItems.length) {\n  throw new Error(`Embedding count mismatch. Expected ${sourceItems.length}, got ${data.length}`);\n}\n\nreturn sourceItems.map((wine, idx) => {\n  const embedding = data[idx]?.embedding;\n  if (!Array.isArray(embedding)) {\n    throw new Error(`Missing embedding for batch index ${idx} (${wine.wine || 'unknown wine'})`);\n  }\n\n  const result = { ...wine };\n  result.embedding = '[' + embedding.join(',') + ']';\n  delete result.embedding_text;\n  return { json: result };\n});\n"
+      },
+      "id": "e493063c-9340-4367-8027-96a8259f1a7f",
+      "name": "Apply Embeddings to Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => ({\n  ct_barcode: i.json.ct_barcode,\n  ct_iwine: i.json.ct_iwine,\n  wine: i.json.wine,\n  vintage: i.json.vintage,\n  producer: i.json.producer,\n  wine_type: i.json.wine_type,\n  color: i.json.color,\n  varietal: i.json.varietal,\n  appellation: i.json.appellation,\n  region: i.json.region,\n  country: i.json.country,\n  locale: i.json.locale,\n  location: i.json.location,\n  bin: i.json.bin,\n  purchase_price: i.json.purchase_price,\n  valuation: i.json.valuation,\n  drink_from: i.json.drink_from,\n  drink_to: i.json.drink_to,\n  ct_score: i.json.ct_score,\n  my_score: i.json.my_score,\n  my_notes: i.json.my_notes,\n  note_date: i.json.note_date,\n  removed_at: null,\n  last_synced_at: i.json.last_synced_at,\n  raw_ct_row: i.json.raw_ct_row,\n  embedding: i.json.embedding\n}));\n\nreturn [{ json: { rows, count: rows.length } }];"
+      },
+      "id": "06637b80-604a-43d8-9c23-fb32213c9ab1",
+      "name": "Build Supabase Upsert Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/wine_inventory",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "ct_barcode"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.rows) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "85b96bc1-01b1-46f9-b43c-37d9c51447be",
+      "name": "Upsert Supabase Batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1472,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/soft_delete_removed_bottles",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ active_ibottles: $('Collect Active iBottle IDs').first().json.active_bottles }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a24bd202-4817-4ff1-90c2-2a41ba1b2915",
+      "name": "Soft-Delete Removed Bottles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        736,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/infer_preferences_from_purchases",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "acb3aa25-cb3d-4a53-acf1-39d46f831705",
+      "name": "Infer Preferences from Purchases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1696,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const upsertCount = $('Build Supabase Upsert Payload').first().json.count || 0;\nconst today = new Date().toISOString().slice(0, 10);\n\nconst summary =\n  'Wine inventory sync ' +\n  today +\n  ': ' +\n  upsertCount +\n  ' active bottles synced from CellarTracker. Purchase preference inference complete.';\n\nreturn [{ json: { summary } }];\n"
+      },
+      "id": "e5ae4012-815c-46c2-955f-d0f659a83270",
+      "name": "Build Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        368
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Nightly 10pm": {
+      "main": [
+        [
+          {
+            "node": "Fetch CT Bottles",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch CT Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch CT Bottles": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV + Merge Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CSV + Merge Notes": {
+      "main": [
+        [
+          {
+            "node": "Build Embedding Batch Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Embedding Batch Request": {
+      "main": [
+        [
+          {
+            "node": "OpenRouter Embedding Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Embedding Batch": {
+      "main": [
+        [
+          {
+            "node": "Apply Embeddings to Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Embeddings to Batch": {
+      "main": [
+        [
+          {
+            "node": "Build Supabase Upsert Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Supabase Upsert Payload": {
+      "main": [
+        [
+          {
+            "node": "Upsert Supabase Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Supabase Batch": {
+      "main": [
+        [
+          {
+            "node": "Infer Preferences from Purchases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Soft-Delete Removed Bottles": {
+      "main": [
+        []
+      ]
+    },
+    "Infer Preferences from Purchases": {
+      "main": [
+        [
+          {
+            "node": "Build Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary": {
+      "main": [
+        []
+      ]
+    },
+    "Fetch CT Notes": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV + Merge Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5bedf698-3e95-4b24-8d07-7d8afbd99243",
+  "meta": {
+    "instanceId": "215a72f9a4e5407ab46d43679bb814e727e8d4d7e5a8e7d9f750580f9f768d59"
+  },
+  "id": "6oLrw8Fk2BPA6esN",
+  "tags": []
+}
