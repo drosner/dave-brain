@@ -32,18 +32,18 @@ npm start
 
 ## Pi deploy
 
-Deploy this directory to the Pi as `/home/drosner/wine-scanner`.
+Deploy this directory into the Pi repo at `/home/drosner/dave-brain/wine-scanner`.
 
 Example:
 
 ```bash
-scp -r wine-scanner drosner@192.168.0.215:/home/drosner/
+scp -r wine-scanner drosner@192.168.0.215:/home/drosner/dave-brain/
 ```
 
 Then on the Pi:
 
 ```bash
-cd ~/wine-scanner
+cd ~/dave-brain/wine-scanner
 npm install
 source ~/.nvm/nvm.sh
 export $(cat ~/n8n/.env | grep -v ^# | xargs)
