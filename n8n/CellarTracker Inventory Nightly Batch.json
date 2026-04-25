@@ -112,7 +112,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n\n  while (i < text.length) {\n    const ch = text[i];\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') {\n          field += '\"';\n          i += 2;\n          continue;\n        }\n        inQuotes = false;\n        i += 1;\n        continue;\n      }\n      field += ch;\n      i += 1;\n      continue;\n    }\n    if (ch === '\"') {\n      inQuotes = true;\n      i += 1;\n      continue;\n    }\n    if (ch === ',') {\n      row.push(field);\n      field = '';\n      i += 1;\n      continue;\n    }\n    if (ch === '\\n') {\n      row.push(field);\n      field = '';\n      rows.push(row);\n      row = [];\n      i += 1;\n      continue;\n    }\n    field += ch;\n    i += 1;\n  }\n\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (!rows.length) return [];\n\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows\n    .slice(1)\n    .filter(r => r.some(v => String(v || '').trim() !== ''))\n    .map(r => {\n      const obj = {};\n      header.forEach((h, idx) => {\n        obj[h] = r[idx] ?? '';\n      });\n      return obj;\n    });\n}\n\nconst bottlesRaw = $('Fetch CT Bottles').first()?.json?.data || '';\nconst notesRaw = $('Fetch CT Notes').first()?.json?.data || '';\n\nif (!String(bottlesRaw).trim()) {\n  throw new Error('Bottles CSV input is empty');\n}\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\n\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = String(n.iWine || n.iwine || '').trim();\n  if (!id) continue;\n\n  if (!notesByWine[id]) {\n    notesByWine[id] = { texts: [], latestDate: null };\n  }\n\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate\n        ? new Date(notesByWine[id].latestDate)\n        : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\n\nconst toDate = (v) => {\n  const s = toStr(v);\n  if (!s) return null;\n  const d = new Date(s);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);\n};\n\nconst inferColor = (row) => {\n  const explicit = toStr(row.Color || row.Colour);\n  if (explicit) return explicit;\n\n  const type = (toStr(row.Type || row.ShortType) || '').toLowerCase();\n  if (!type) return null;\n\n  if (type.includes('rose') || type.includes('rosé')) return 'Rose';\n  if (type.includes('orange')) return 'Orange';\n  if (type.includes('white')) return 'White';\n  if (type.includes('red')) return 'Red';\n  if (type.includes('sparkling') || type.includes('champagne')) return 'Sparkling';\n  if (\n    type.includes('dessert') ||\n    type.includes('fortified') ||\n    type.includes('port') ||\n    type.includes('sherry') ||\n    type.includes('madeira')\n  ) {\n    return 'Dessert/Fortified';\n  }\n\n  return toStr(row.Type || row.ShortType);\n};\n\nconst output = [];\n\nfor (const row of bottles) {\n  const ct_barcode = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n\n  if (!ct_barcode || !ct_iwine) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n\n  const noteData = notesByWine[String(ct_iwine)] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n\n  const embeddingParts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Varietal),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    my_notes ? `Tasting notes: ${my_notes}` : null,\n  ].filter(Boolean);\n\n  output.push({\n    json: {\n      ct_barcode,\n      ct_iwine,\n      bottle_state: toStr(row.BottleState),\n      wine: toStr(row.Wine),\n      vintage: toInt(row.Vintage),\n      producer: toStr(row.Producer),\n      wine_type: toStr(row.Type),\n      color: inferColor(row),\n      varietal: toStr(row.Varietal),\n      master_varietal: toStr(row.MasterVarietal),\n      designation: toStr(row.Designation),\n      vineyard: toStr(row.Vineyard),\n      appellation: toStr(row.Appellation),\n      region: toStr(row.Region),\n      sub_region: toStr(row.SubRegion),\n      country: toStr(row.Country),\n      locale: toStr(row.Locale),\n      bottle_size: toStr(row.BottleSize),\n      drink_from: toInt(row.BeginConsume),\n      drink_to: toInt(row.EndConsume),\n      my_notes,\n      note_date: noteData.latestDate ? toDate(noteData.latestDate) : null,\n      location: toStr(row.Location),\n      bin: toStr(row.Bin),\n      store: toStr(row.Store),\n      purchase_date: toDate(row.PurchaseDate),\n      delivery_date: toDate(row.DeliveryDate),\n      bottle_cost: toFloat(row.BottleCost),\n      bottle_cost_currency: toStr(row.BottleCostCurrency),\n      bottle_note: toStr(row.BottleNote),\n      purchase_note: toStr(row.PurchaseNote),\n      consumption_date: toDate(row.ConsumptionDate),\n      consumption_type: toStr(row.ConsumptionType),\n      consumption_note: toStr(row.ConsumptionNote),\n      consumption_revenue: toFloat(row.ConsumptionRevenue),\n      consumption_revenue_currency: toStr(row.ConsumptionRevenueCurrency),\n      removed_at: null,\n      last_synced_at: new Date().toISOString(),\n      raw_ct_row: row,\n      embedding_text: embeddingParts.join('. '),\n    },\n  });\n}\n\nif (!output.length) {\n  throw new Error('Parsed zero bottles from CellarTracker export');\n}\n\nreturn output;\n"
+        "jsCode": "function parseCSV(raw) {\n  if (!raw || !String(raw).trim()) return [];\n  const text = String(raw).replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n  const rows = [];\n  let row = [];\n  let field = '';\n  let i = 0;\n  let inQuotes = false;\n\n  while (i < text.length) {\n    const ch = text[i];\n    if (inQuotes) {\n      if (ch === '\"') {\n        if (text[i + 1] === '\"') {\n          field += '\"';\n          i += 2;\n          continue;\n        }\n        inQuotes = false;\n        i += 1;\n        continue;\n      }\n      field += ch;\n      i += 1;\n      continue;\n    }\n    if (ch === '\"') {\n      inQuotes = true;\n      i += 1;\n      continue;\n    }\n    if (ch === ',') {\n      row.push(field);\n      field = '';\n      i += 1;\n      continue;\n    }\n    if (ch === '\\n') {\n      row.push(field);\n      field = '';\n      rows.push(row);\n      row = [];\n      i += 1;\n      continue;\n    }\n    field += ch;\n    i += 1;\n  }\n\n  row.push(field);\n  if (row.length > 1 || row[0] !== '') rows.push(row);\n  if (!rows.length) return [];\n\n  const header = rows[0].map(h => String(h || '').trim());\n  return rows\n    .slice(1)\n    .filter(r => r.some(v => String(v || '').trim() !== ''))\n    .map(r => {\n      const obj = {};\n      header.forEach((h, idx) => {\n        obj[h] = r[idx] ?? '';\n      });\n      return obj;\n    });\n}\n\nconst bottlesRaw = $('Fetch CT Bottles').first()?.json?.data || '';\nconst notesRaw = $('Fetch CT Notes').first()?.json?.data || '';\n\nif (!String(bottlesRaw).trim()) {\n  throw new Error('Bottles CSV input is empty');\n}\n\nconst bottles = parseCSV(bottlesRaw);\nconst notes = parseCSV(notesRaw);\n\nconst notesByWine = {};\nfor (const n of notes) {\n  const id = String(n.iWine || n.iwine || '').trim();\n  if (!id) continue;\n\n  if (!notesByWine[id]) {\n    notesByWine[id] = { texts: [], latestDate: null };\n  }\n\n  const noteText = String(n.Note || '').trim();\n  if (noteText) notesByWine[id].texts.push(noteText);\n\n  const dateText = String(n.Date || '').trim();\n  if (dateText) {\n    const d = new Date(dateText);\n    if (!Number.isNaN(d.getTime())) {\n      const cur = notesByWine[id].latestDate\n        ? new Date(notesByWine[id].latestDate)\n        : null;\n      if (!cur || d > cur) notesByWine[id].latestDate = dateText;\n    }\n  }\n}\n\nconst toInt = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseInt(v, 10);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toFloat = (v) => {\n  if (v === '' || v == null) return null;\n  const n = parseFloat(v);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst toStr = (v) => {\n  if (v === '' || v == null) return null;\n  const s = String(v).trim();\n  return s === '' ? null : s;\n};\n\nconst toDate = (v) => {\n  const s = toStr(v);\n  if (!s) return null;\n  const d = new Date(s);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);\n};\n\nconst inferColor = (row) => {\n  const explicit = toStr(row.Color || row.Colour);\n  if (explicit) return explicit;\n\n  const type = (toStr(row.Type || row.ShortType) || '').toLowerCase();\n  if (!type) return null;\n\n  if (type.includes('rose') || type.includes('ros\u00e9')) return 'Rose';\n  if (type.includes('orange')) return 'Orange';\n  if (type.includes('white')) return 'White';\n  if (type.includes('red')) return 'Red';\n  if (type.includes('sparkling') || type.includes('champagne')) return 'Sparkling';\n  if (\n    type.includes('dessert') ||\n    type.includes('fortified') ||\n    type.includes('port') ||\n    type.includes('sherry') ||\n    type.includes('madeira')\n  ) {\n    return 'Dessert/Fortified';\n  }\n\n  return toStr(row.Type || row.ShortType);\n};\n\nconst output = [];\n\nfor (const row of bottles) {\n  const ct_barcode = toStr(row.Barcode || row.barcode);\n  const ct_iwine = toInt(row.iWine || row.iwine);\n\n  if (!ct_barcode || !ct_iwine) continue;\n  if (String(row.BottleState || '').trim() && String(row.BottleState).trim() !== '1') continue;\n\n  const noteData = notesByWine[String(ct_iwine)] || { texts: [], latestDate: null };\n  const my_notes = noteData.texts.length ? noteData.texts.join(' | ') : null;\n\n  const embeddingParts = [\n    toStr(row.Wine),\n    toInt(row.Vintage) ? `Vintage ${row.Vintage}` : null,\n    toStr(row.Producer),\n    toStr(row.Type),\n    toStr(row.Varietal),\n    toStr(row.Appellation),\n    toStr(row.Region),\n    toStr(row.Country),\n    my_notes ? `Tasting notes: ${my_notes}` : null,\n  ].filter(Boolean);\n\n  output.push({\n    json: {\n      ct_barcode,\n      ct_iwine,\n      bottle_state: toStr(row.BottleState),\n      wine: toStr(row.Wine),\n      vintage: toInt(row.Vintage),\n      producer: toStr(row.Producer),\n      wine_type: toStr(row.Type),\n      color: inferColor(row),\n      varietal: toStr(row.Varietal),\n      master_varietal: toStr(row.MasterVarietal),\n      designation: toStr(row.Designation),\n      vineyard: toStr(row.Vineyard),\n      appellation: toStr(row.Appellation),\n      region: toStr(row.Region),\n      sub_region: toStr(row.SubRegion),\n      country: toStr(row.Country),\n      locale: toStr(row.Locale),\n      bottle_size: toStr(row.BottleSize),\n      drink_from: toInt(row.BeginConsume),\n      drink_to: toInt(row.EndConsume),\n      my_notes,\n      note_date: noteData.latestDate ? toDate(noteData.latestDate) : null,\n      location: toStr(row.Location),\n      bin: toStr(row.Bin),\n      store: toStr(row.Store),\n      purchase_date: toDate(row.PurchaseDate),\n      delivery_date: toDate(row.DeliveryDate),\n      bottle_cost: toFloat(row.BottleCost),\n      bottle_cost_currency: toStr(row.BottleCostCurrency),\n      bottle_note: toStr(row.BottleNote),\n      purchase_note: toStr(row.PurchaseNote),\n      consumption_date: toDate(row.ConsumptionDate),\n      consumption_type: toStr(row.ConsumptionType),\n      consumption_note: toStr(row.ConsumptionNote),\n      consumption_revenue: toFloat(row.ConsumptionRevenue),\n      consumption_revenue_currency: toStr(row.ConsumptionRevenueCurrency),\n      removed_at: null,\n      last_synced_at: new Date().toISOString(),\n      raw_ct_row: row,\n      embedding_text: embeddingParts.join('. '),\n    },\n  });\n}\n\nif (!output.length) {\n  throw new Error('Parsed zero bottles from CellarTracker export');\n}\n\nreturn output;\n"
       },
       "id": "22cf5078-cceb-4146-9e09-ac2b2ddb9090",
       "name": "Parse CSV + Merge Notes",
@@ -190,7 +190,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const items = $('Parse CSV + Merge Notes').all();\nif (!items.length) return [];\n\nconst byWine = new Map();\n\nfor (const item of items) {\n  const row = item.json;\n  if (!row.ct_iwine) continue;\n\n  if (!byWine.has(row.ct_iwine)) {\n    byWine.set(row.ct_iwine, {\n      ct_iwine: row.ct_iwine,\n      wine: row.wine,\n      vintage: row.vintage,\n      producer: row.producer,\n      wine_type: row.wine_type,\n      color: row.color,\n      varietal: row.varietal,\n      master_varietal: row.master_varietal,\n      designation: row.designation,\n      vineyard: row.vineyard,\n      appellation: row.appellation,\n      region: row.region,\n      sub_region: row.sub_region,\n      country: row.country,\n      locale: row.locale,\n      bottle_size: row.bottle_size,\n      drink_from: row.drink_from,\n      drink_to: row.drink_to,\n      my_notes: row.my_notes,\n      note_date: row.note_date,\n      embedding_text: row.embedding_text || '',\n    });\n  }\n}\n\nconst source_items = Array.from(byWine.values());\n\nif (!source_items.length) {\n  throw new Error('No wine rows available for embedding');\n}\n\nreturn [{\n  json: {\n    batch_count: source_items.length,\n    source_items,\n    request_body: {\n      model: 'openai/text-embedding-3-small',\n      input: source_items.map(i => i.embedding_text || ''),\n    },\n  },\n}];\n"
+        "jsCode": "const items = $('Parse CSV + Merge Notes').all();\nif (!items.length) return [];\n\nconst existingRows = $('Fetch Existing Wines').all().map(i => i.json || {});\nconst existingByWine = new Map();\nfor (const row of existingRows) {\n  if (!row.ct_iwine) continue;\n  existingByWine.set(String(row.ct_iwine), row);\n}\n\nconst normalize = (v) => {\n  if (v === '' || v == null) return null;\n  if (typeof v === 'string') {\n    const s = v.trim();\n    return s === '' ? null : s;\n  }\n  return v;\n};\n\nconst canonicalSnapshot = (row) => JSON.stringify({\n  wine: normalize(row.wine),\n  vintage: normalize(row.vintage),\n  producer: normalize(row.producer),\n  wine_type: normalize(row.wine_type),\n  color: normalize(row.color),\n  varietal: normalize(row.varietal),\n  master_varietal: normalize(row.master_varietal),\n  designation: normalize(row.designation),\n  vineyard: normalize(row.vineyard),\n  appellation: normalize(row.appellation),\n  region: normalize(row.region),\n  sub_region: normalize(row.sub_region),\n  country: normalize(row.country),\n  locale: normalize(row.locale),\n  bottle_size: normalize(row.bottle_size),\n  drink_from: normalize(row.drink_from),\n  drink_to: normalize(row.drink_to),\n  my_notes: normalize(row.my_notes),\n  note_date: normalize(row.note_date),\n});\n\nconst byWine = new Map();\nfor (const item of items) {\n  const row = item.json;\n  if (!row.ct_iwine) continue;\n  if (!byWine.has(row.ct_iwine)) {\n    byWine.set(row.ct_iwine, {\n      ct_iwine: row.ct_iwine,\n      wine: row.wine,\n      vintage: row.vintage,\n      producer: row.producer,\n      wine_type: row.wine_type,\n      color: row.color,\n      varietal: row.varietal,\n      master_varietal: row.master_varietal,\n      designation: row.designation,\n      vineyard: row.vineyard,\n      appellation: row.appellation,\n      region: row.region,\n      sub_region: row.sub_region,\n      country: row.country,\n      locale: row.locale,\n      bottle_size: row.bottle_size,\n      drink_from: row.drink_from,\n      drink_to: row.drink_to,\n      my_notes: row.my_notes,\n      note_date: row.note_date,\n      embedding_text: row.embedding_text || '',\n    });\n  }\n}\n\nconst source_items = Array.from(byWine.values());\nif (!source_items.length) throw new Error('No wine rows available for embedding');\n\nconst items_needing_embeddings = [];\nconst passthrough_items = [];\n\nfor (const wine of source_items) {\n  const existing = existingByWine.get(String(wine.ct_iwine));\n  const changed = !existing || canonicalSnapshot(wine) !== canonicalSnapshot(existing);\n  if (!changed && Array.isArray(existing.embedding) && existing.embedding.length) {\n    passthrough_items.push({ ...wine, embedding: '[' + existing.embedding.join(',') + ']' });\n  } else {\n    items_needing_embeddings.push(wine);\n  }\n}\n\nreturn [{\n  json: {\n    batch_count: items_needing_embeddings.length,\n    source_items,\n    items_needing_embeddings,\n    passthrough_items,\n    request_body: {\n      model: 'openai/text-embedding-3-small',\n      input: items_needing_embeddings.map(i => i.embedding_text || ''),\n    },\n  },\n}];"
       },
       "id": "f8ff9275-18fd-46a5-b96e-80c5fae82912",
       "name": "Build Wine Embedding Batch Request",
@@ -236,7 +236,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\nconst resp = $json;\nconst prep = $('Build Wine Embedding Batch Request').first().json;\nconst sourceItems = prep.source_items || [];\nconst data = Array.isArray(resp.data) ? resp.data : [];\nif (data.length !== sourceItems.length) {\n  throw new Error(`Embedding count mismatch. Expected ${sourceItems.length}, got ${data.length}`);\n}\nreturn sourceItems.map((wine, idx) => {\n  const embedding = data[idx]?.embedding;\n  if (!Array.isArray(embedding)) throw new Error(`Missing embedding for batch index ${idx}`);\n  return { json: { ...wine, embedding: '[' + embedding.join(',') + ']' } };\n});\n"
+        "jsCode": "\nconst resp = $json;\nconst prep = $('Build Wine Embedding Batch Request').first().json;\nconst pending = prep.items_needing_embeddings || [];\nconst passthrough = prep.passthrough_items || [];\nconst data = Array.isArray(resp.data) ? resp.data : [];\n\nif (pending.length === 0) {\n  return passthrough.map((wine) => ({ json: wine }));\n}\n\nif (data.length !== pending.length) {\n  throw new Error(`Embedding count mismatch. Expected ${pending.length}, got ${data.length}`);\n}\n\nconst embedded = pending.map((wine, idx) => {\n  const embedding = data[idx]?.embedding;\n  if (!Array.isArray(embedding)) throw new Error(`Missing embedding for batch index ${idx}`);\n  return { ...wine, embedding: '[' + embedding.join(',') + ']' };\n});\n\nreturn [...passthrough, ...embedded].map((wine) => ({ json: wine }));\n"
       },
       "id": "0f7135ca-8a88-4d2b-807c-e0282e2a3e5a",
       "name": "Apply Embeddings to Batch",
@@ -459,6 +459,78 @@
         1488,
         336
       ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/wines",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "ct_iwine,wine,vintage,producer,wine_type,color,varietal,master_varietal,designation,vineyard,appellation,region,sub_region,country,locale,bottle_size,drink_from,drink_to,my_notes,note_date,embedding"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "d4f20f28-9e2b-40cd-90c9-f6c09c17e7d0",
+      "name": "Fetch Existing Wines",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ Number($json.batch_count || 0) }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "93f54468-4f0b-4ae8-9837-a583a3b7ed18",
+      "name": "Embeddings Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $('Build Wine Embedding Batch Request').first().json;\nconst passthrough = prep.passthrough_items || [];\nreturn passthrough.map((wine) => ({ json: wine }));"
+      },
+      "id": "385a213f-84fa-43f5-a624-bb4ce0bf9e66",
+      "name": "Use Existing Embeddings Only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        640
+      ]
     }
   ],
   "pinData": {},
@@ -533,7 +605,7 @@
       "main": [
         [
           {
-            "node": "Build Wine Embedding Batch Request",
+            "node": "Fetch Existing Wines",
             "type": "main",
             "index": 0
           }
@@ -544,7 +616,7 @@
       "main": [
         [
           {
-            "node": "OpenRouter Embedding Batch",
+            "node": "Embeddings Needed?",
             "type": "main",
             "index": 0
           }
@@ -633,6 +705,46 @@
         [
           {
             "node": "Build Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Existing Wines": {
+      "main": [
+        [
+          {
+            "node": "Build Wine Embedding Batch Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Needed?": {
+      "main": [
+        [
+          {
+            "node": "OpenRouter Embedding Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Use Existing Embeddings Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Existing Embeddings Only": {
+      "main": [
+        [
+          {
+            "node": "Build Wines Upsert Payload",
             "type": "main",
             "index": 0
           }
