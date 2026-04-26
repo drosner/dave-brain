@@ -25,3 +25,7 @@ open-brain-credential-tracker.pdf
 # Wine scanner app
 wine-scanner/node_modules/
 wine-scanner/server.log
+
+# Playwright runner
+scripts/playwright/node_modules/
+scripts/logs/cellartracker-exports/

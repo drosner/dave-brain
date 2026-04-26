@@ -44,4 +44,4 @@ Always flag this reminder when touching edge function code.
 - scripts/utils/ — shared TypeScript utilities (both Deno and Node compatible)
 - scripts/logs/ — log files (gitignored)
 - scripts/.auth/ — saved browser sessions (gitignored)
-- ~/davebrain/.env — all secrets (gitignored)
+- /home/drosner/dave-brain/.env — all secrets (gitignored)
