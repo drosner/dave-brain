@@ -10,8 +10,7 @@ ExecStart=/usr/bin/chromium \
   --no-first-run \
   --no-default-browser-check \
   --headless=new \
-  --disable-gpu \
-  --single-process
+  --disable-gpu
 Restart=always
 RestartSec=5
 
