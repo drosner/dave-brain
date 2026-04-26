@@ -13,7 +13,12 @@
 
 import { chromium } from "playwright";
 import * as dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import * as path from "path";
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load .env from repo root (two levels up from scripts/playwright/)
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
