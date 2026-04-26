@@ -79,6 +79,9 @@ async function run() {
   await page.locator('input[type="submit"], button[type="submit"]').first().click();
   await page.waitForLoadState("domcontentloaded");
 
+  // Navigate to cellar after login rather than trusting the default redirect
+  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", { waitUntil: "domcontentloaded" });
+
   const finalUrl = page.url();
   const finalTitle = await page.title();
   console.log("Post-login URL:  ", finalUrl);
@@ -87,7 +90,7 @@ async function run() {
   if (finalUrl.includes("password.asp")) {
     console.error("Still on login page — credentials may be wrong or form selectors need updating.");
   } else {
-    console.log("Login appears successful.");
+    console.log("Login successful — cellar page loaded.");
   }
 
   // Leave browser open for inspection
