@@ -22,8 +22,11 @@ const CELLARTRACKER_USER = process.env.CT_USER || process.env.CELLARTRACKER_USER
 const CELLARTRACKER_PASSWORD = process.env.CT_PASSWORD || process.env.CELLARTRACKER_PASSWORD || "";
 const CHROMIUM_EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH ||
   (process.platform === "win32" ? undefined : "/usr/bin/chromium");
+const CHROMIUM_CDP_URL = process.env.CHROMIUM_CDP_URL || "";
 const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+const HOME_URL = "https://www.cellartracker.com";
+const LOGIN_URL = "https://www.cellartracker.com/password.asp";
 
 export interface CellarTrackerExportOptions {
   table?: string;
@@ -49,6 +52,13 @@ export interface CellarTrackerExportResult {
   rows?: Record<string, string>[];
   rowCount?: number;
   source?: "direct-url" | "inventory-ui";
+}
+
+interface BrowserSession {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  owned: boolean;
 }
 
 function buildLaunchOptions(headless: boolean) {
@@ -83,6 +93,25 @@ async function buildContext(browser: Browser): Promise<BrowserContext> {
   });
 
   return context;
+}
+
+function sleep(minMs: number, maxMs: number): Promise<void> {
+  const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function openBrowserSession(headless: boolean): Promise<BrowserSession> {
+  if (CHROMIUM_CDP_URL) {
+    const browser = await chromium.connectOverCDP(CHROMIUM_CDP_URL);
+    const context = browser.contexts()[0] ?? await buildContext(browser);
+    const page = context.pages()[0] ?? await context.newPage();
+    return { browser, context, page, owned: false };
+  }
+
+  const browser = await chromium.launch(buildLaunchOptions(headless));
+  const context = await buildContext(browser);
+  const page = await context.newPage();
+  return { browser, context, page, owned: true };
 }
 
 function timestampForFile(date: Date): string {
@@ -264,7 +293,15 @@ async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; p
 }
 
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
-  await page.goto("https://www.cellartracker.com/signin.asp", {
+  await page.goto(HOME_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: timeoutMs,
+  });
+
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+  await sleep(1500, 3000);
+
+  await page.goto(LOGIN_URL, {
     waitUntil: "domcontentloaded",
     timeout: timeoutMs,
   });
@@ -273,6 +310,7 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => {});
 
   const filledUser = await fillFirst(page, [
+    'input[name="szUser"]',
     'input[name="User"]',
     'input[name="user"]',
     'input[type="email"]',
@@ -281,6 +319,7 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   ], CELLARTRACKER_USER);
 
   const filledPassword = await fillFirst(page, [
+    'input[name="szPassword"]',
     'input[name="Password"]',
     'input[name="password"]',
     'input[type="password"]',
@@ -306,8 +345,10 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   }).catch(() => null);
 
   const clicked = await clickFirst(page, [
+    'input[name="btnLogin"]',
     'input[type="submit"]',
     'button[type="submit"]',
+    'input[value*="Log"]',
     'input[value*="Sign"]',
     'button:has-text("Sign in")',
     'button:has-text("Log in")',
@@ -428,11 +469,14 @@ export async function runCellarTrackerExport(
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
   let page: Page | null = null;
+  let ownedBrowser = false;
 
   try {
-    browser = await chromium.launch(buildLaunchOptions(options.headless));
-    context = await buildContext(browser);
-    page = await context.newPage();
+    const session = await openBrowserSession(options.headless);
+    browser = session.browser;
+    context = session.context;
+    page = session.page;
+    ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
     const { download, response } = await triggerExport(page, options);
@@ -483,10 +527,10 @@ export async function runCellarTrackerExport(
       table: options.table,
     };
   } finally {
-    if (context) {
+    if (ownedBrowser && context) {
       await context.close();
     }
-    if (browser) {
+    if (ownedBrowser && browser) {
       await browser.close();
     }
   }
@@ -513,11 +557,14 @@ export async function runCellarTrackerInventoryExportTest(
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
   let page: Page | null = null;
+  let ownedBrowser = false;
 
   try {
-    browser = await chromium.launch(buildLaunchOptions(options.headless));
-    context = await buildContext(browser);
-    page = await context.newPage();
+    const session = await openBrowserSession(options.headless);
+    browser = session.browser;
+    context = session.context;
+    page = session.page;
+    ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
     const { download, response } = await exportFromInventoryUi(page, options);
@@ -573,10 +620,10 @@ export async function runCellarTrackerInventoryExportTest(
       source: "inventory-ui",
     };
   } finally {
-    if (context) {
+    if (ownedBrowser && context) {
       await context.close();
     }
-    if (browser) {
+    if (ownedBrowser && browser) {
       await browser.close();
     }
   }
