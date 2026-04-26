@@ -31,12 +31,16 @@
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 import { load } from "https://deno.land/std/dotenv/mod.ts";
-await load({ export: true, envPath: "/home/drosner/dave-brain/.env" });
 
+// Load .env — works on both Pi and Windows
+const envPath = Deno.build.os === "windows"
+  ? `${new URL(".", import.meta.url).pathname.replace(/^\//, "")}../.env`
+  : "/home/drosner/dave-brain/.env";
+await load({ export: true, envPath });
 
 const SCRIPT_DIR = new URL(".", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
-const CREDENTIALS_PATH = `${SCRIPT_DIR}credentials.json`;
-const TOKEN_PATH = `${SCRIPT_DIR}token.json`;
+const CREDENTIALS_PATH = Deno.env.get("GMAIL_CREDENTIALS_PATH") || `${SCRIPT_DIR}credentials.json`;
+const TOKEN_PATH = Deno.env.get("GMAIL_TOKEN_PATH") || `${SCRIPT_DIR}token.json`;
 const SYNC_LOG_PATH = `${SCRIPT_DIR}sync-log.json`;
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
