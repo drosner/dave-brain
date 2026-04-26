@@ -1,6 +1,8 @@
 // server.js - Wine Scanner Pi Server
 // Run: node server.js
 // Requires: npm install express cors
+import dotenv from "dotenv";
+dotenv.config({ path: "/home/drosner/dave-brain/.env" });
 
 import express from "express";
 import cors from "cors";
@@ -357,14 +359,14 @@ app.post("/api/scan-multi", async (req, res) => {
             inventory: match,
             label: match
               ? {
-                  price: match.purchase_price ? `$${match.purchase_price}` : null,
-                  location: match.location || null,
-                  bin: match.bin || null,
-                  score: match.ct_score || match.my_score || null,
-                  drink: match.drink_from && match.drink_to
-                    ? `${match.drink_from}-${match.drink_to}`
-                    : null,
-                }
+                price: match.purchase_price ? `$${match.purchase_price}` : null,
+                location: match.location || null,
+                bin: match.bin || null,
+                score: match.ct_score || match.my_score || null,
+                drink: match.drink_from && match.drink_to
+                  ? `${match.drink_from}-${match.drink_to}`
+                  : null,
+              }
               : null,
           };
         } catch {

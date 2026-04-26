@@ -30,6 +30,9 @@
  */
 
 // ─── Configuration ───────────────────────────────────────────────────────────
+import { load } from "https://deno.land/std/dotenv/mod.ts";
+await load({ export: true, envPath: "/home/drosner/dave-brain/.env" });
+
 
 const SCRIPT_DIR = new URL(".", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
 const CREDENTIALS_PATH = `${SCRIPT_DIR}credentials.json`;

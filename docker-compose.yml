@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   n8n:
     image: n8nio/n8n:latest
@@ -14,8 +12,8 @@ services:
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       # Network — critical for OAuth callback to work
-      - N8N_EDITOR_BASE_URL=http://brain.local:5678
-      - WEBHOOK_URL=http://brain.local:5678
+      - N8N_EDITOR_BASE_URL=http://192.168.0.215:5678
+      - WEBHOOK_URL=http://192.168.0.215:5678
       # Timezone
       - GENERIC_TIMEZONE=America/New_York
       - TZ=America/New_York
