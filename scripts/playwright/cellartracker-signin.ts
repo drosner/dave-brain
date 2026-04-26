@@ -80,7 +80,7 @@ async function run() {
   await page.waitForLoadState("domcontentloaded");
 
   // Navigate to cellar after login rather than trusting the default redirect
-  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", { waitUntil: "domcontentloaded" });
+  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", { waitUntil: "networkidle" });
 
   const finalUrl = page.url();
   const finalTitle = await page.title();
