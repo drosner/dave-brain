@@ -22,6 +22,8 @@ const CELLARTRACKER_USER = process.env.CT_USER || process.env.CELLARTRACKER_USER
 const CELLARTRACKER_PASSWORD = process.env.CT_PASSWORD || process.env.CELLARTRACKER_PASSWORD || "";
 const CHROMIUM_EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH ||
   (process.platform === "win32" ? undefined : "/usr/bin/chromium");
+const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 
 export interface CellarTrackerExportOptions {
   table?: string;
@@ -57,8 +59,30 @@ function buildLaunchOptions(headless: boolean) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
     ],
   };
+}
+
+async function buildContext(browser: Browser): Promise<BrowserContext> {
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    viewport: { width: 1440, height: 960 },
+    userAgent: DEFAULT_USER_AGENT,
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => undefined,
+    });
+  });
+
+  return context;
 }
 
 function timestampForFile(date: Date): string {
@@ -407,10 +431,7 @@ export async function runCellarTrackerExport(
 
   try {
     browser = await chromium.launch(buildLaunchOptions(options.headless));
-    context = await browser.newContext({
-      acceptDownloads: true,
-      viewport: { width: 1440, height: 960 },
-    });
+    context = await buildContext(browser);
     page = await context.newPage();
 
     await loginToCellarTracker(page, options.timeoutMs);
@@ -495,10 +516,7 @@ export async function runCellarTrackerInventoryExportTest(
 
   try {
     browser = await chromium.launch(buildLaunchOptions(options.headless));
-    context = await browser.newContext({
-      acceptDownloads: true,
-      viewport: { width: 1440, height: 960 },
-    });
+    context = await buildContext(browser);
     page = await context.newPage();
 
     await loginToCellarTracker(page, options.timeoutMs);
