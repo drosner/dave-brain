@@ -82,6 +82,12 @@ async function saveFailureScreenshot(page: Page, outputDir: string): Promise<voi
       path: path.join(outputDir, "cellartracker-export-failure.png"),
       fullPage: true,
     });
+    const html = await page.content();
+    await fs.writeFile(
+      path.join(outputDir, "cellartracker-export-failure.html"),
+      html,
+      "utf8",
+    );
   } catch {
     // Best effort only.
   }
@@ -190,6 +196,49 @@ async function fillFirst(page: Page, selectors: string[], value: string): Promis
   return false;
 }
 
+async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; password: boolean }> {
+  const textLikeInputs = page.locator([
+    'input[type="email"]',
+    'input[type="text"]',
+    'input:not([type])',
+  ].join(", "));
+
+  let user = false;
+  const textLikeCount = await textLikeInputs.count();
+  for (let i = 0; i < textLikeCount; i += 1) {
+    const locator = textLikeInputs.nth(i);
+    const name = ((await locator.getAttribute("name")) || "").toLowerCase();
+    const id = ((await locator.getAttribute("id")) || "").toLowerCase();
+    const placeholder = ((await locator.getAttribute("placeholder")) || "").toLowerCase();
+    const autocomplete = ((await locator.getAttribute("autocomplete")) || "").toLowerCase();
+    const signal = `${name} ${id} ${placeholder} ${autocomplete}`;
+
+    if (
+      signal.includes("user") ||
+      signal.includes("email") ||
+      signal.includes("login") ||
+      autocomplete.includes("username")
+    ) {
+      await locator.fill(CELLARTRACKER_USER);
+      user = true;
+      break;
+    }
+  }
+
+  if (!user && textLikeCount > 0) {
+    await textLikeInputs.first().fill(CELLARTRACKER_USER);
+    user = true;
+  }
+
+  const passwordInputs = page.locator('input[type="password"]');
+  const password = await passwordInputs.count() > 0;
+  if (password) {
+    await passwordInputs.first().fill(CELLARTRACKER_PASSWORD);
+  }
+
+  return { user, password };
+}
+
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
   await page.goto("https://www.cellartracker.com/signin.asp", {
     waitUntil: "domcontentloaded",
@@ -197,6 +246,7 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   });
 
   await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+  await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => {});
 
   const filledUser = await fillFirst(page, [
     'input[name="User"]',
@@ -213,7 +263,16 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
     "#Password",
   ], CELLARTRACKER_PASSWORD);
 
-  if (!filledUser || !filledPassword) {
+  let userOk = filledUser;
+  let passwordOk = filledPassword;
+
+  if (!userOk || !passwordOk) {
+    const fallback = await fillBestEffortLoginFields(page);
+    userOk = userOk || fallback.user;
+    passwordOk = passwordOk || fallback.password;
+  }
+
+  if (!userOk || !passwordOk) {
     throw new Error("Could not find CellarTracker login form fields");
   }
 
