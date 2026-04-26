@@ -1,33 +1,47 @@
-﻿COMPLETED MIGRATIONS:
-- 001: extended projects table (description, category, location, started_at, target_date, updated_at)
-- 002: people table + project_people junction
-- 003: todos table (standalone, optional project_id/person_id)
-- 004: milestones table (standalone, optional project_id)
-- 005: orders project_id FK added
-- 006: 12 projects seeded from brain data
+# AGENTS.md — dave-brain
 
-CURRENT SCHEMA (accurate):
-- thoughts: core OB1 table, unchanged
-- orders: full purchase tracking, project text + project_id FK
-- projects: 12 active projects seeded (Ski House, Garbage Pi V2, Primary Home, Pool House, Pool House Sofa, RAS Workbench, Boiler Controller, Metal Shop Buildout, AI Scaffolding, Home Assistant, Flying, Wine Collection)
-- people: empty, populate going forward
-- todos: empty, populate going forward  
-- milestones: empty, populate going forward
-- Views: open_orders, recent_deliveries, project_spend
+## Purpose
+Personal automation system. All scripts execute on Raspberry Pi 5 (brain.local / 192.168.0.215).
+Orchestrated by n8n (brain.local:5678). Data stored in Supabase via two MCP servers.
+End user to be used for execution is drosner
 
-DATA STRATEGY:
-- Thoughts (brain): project knowledge and context from Codex/ChatGPT migrations is already there and good. New project decisions and research captured going forward.
-- Orders/todos/milestones/people: all start fresh from now. No legacy migration needed. Dropbox documents are a future ingestion effort.
-- Gmail is source of truth for operational data (orders, shipping, tasks).
+## Language Rules
+- Existing scripts: Deno + TypeScript (pull-gmail.ts, capture-orders.ts)
+- Playwright scripts (scripts/playwright/): Node.js + TypeScript, tsx runner
+- Never use Bun — incompatible with Playwright
 
-BUGS FIXED:
-- people serialization bug in pull-gmail.ts fixed (contacts now flat strings)
+## Core Architecture Principle — MCP as Interface Layer
+Scripts NEVER write to Supabase directly. All data access goes through MCP tool calls.
+- General data (thoughts, todos, orders, projects) → Open Brain MCP
+- Wine data (bottles, preferences, reactions) → Wine Brain MCP
+- Only the MCP edge functions hold SUPABASE_SERVICE_ROLE_KEY
+- Scripts only need OPEN_BRAIN_MCP_KEY and/or WINE_BRAIN_MCP_KEY
 
-CURRENT PRIORITIES:
-1. Update AGENTS.md (in progress)
-2. Fix Angel Flight East and other noise emails being ingested as thoughts in pull-gmail.ts
-3. Set up n8n on VPS for always-on Gmail watch
-4. Dropbox document ingestion (future)
-5. Codex weekly project review skill
+## MCP Endpoints
+- Open Brain: https://zujvqteqcusephuwuqhe.supabase.co/functions/v1/open-brain-mcp
+- Wine Brain: https://zujvqteqcusephuwuqhe.supabase.co/functions/v1/wine-brain-mcp
+- Shared MCP client: scripts/utils/mcp-client.ts — always use this, never inline fetch
 
-Keep the same structure and tone as the existing AGENTS.md. Show me the new version before writing it.
+## Security — Non-Negotiable
+- Never commit: .env, credentials.json, token.json, .auth/*, scripts/logs/*
+- No API keys or credentials in source code — always process.env
+- Scripts use only MCP keys, never SUPABASE_SERVICE_ROLE_KEY
+
+## Code Style Reference
+- Read scripts/pull-gmail.ts for all style, error handling, and .env loading conventions
+- Read scripts/utils/ before writing any new script — reuse shared utilities
+- All scripts output final JSON status to stdout (n8n captures this)
+- All scripts append status entry to scripts/logs/automation-status.json
+
+## Supabase Edge Function Deployment (known issue)
+CLI `supabase functions deploy` silently fails for this project.
+Reliable path: Supabase Dashboard → Edge Functions → [function name] → Edit → paste → Deploy
+Always flag this reminder when touching edge function code.
+
+## Key Pi Paths
+- scripts/ — Deno scripts
+- scripts/playwright/ — Node.js Playwright scripts
+- scripts/utils/ — shared TypeScript utilities (both Deno and Node compatible)
+- scripts/logs/ — log files (gitignored)
+- scripts/.auth/ — saved browser sessions (gitignored)
+- ~/davebrain/.env — all secrets (gitignored)

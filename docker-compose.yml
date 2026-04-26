@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Auth
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      # Network — critical for OAuth callback to work
+      - N8N_EDITOR_BASE_URL=http://brain.local:5678
+      - WEBHOOK_URL=http://brain.local:5678
+      # Timezone
+      - GENERIC_TIMEZONE=America/New_York
+      - TZ=America/New_York
+      # Data path
+      - N8N_USER_FOLDER=/home/node/.n8n
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Mount scripts dir so n8n Execute Command nodes can call them
+      - /home/drosner/davebrain/scripts:/scripts:ro
+      # Mount .auth dir for Gmail credentials (read-only)
+      - /home/drosner/davebrain/.auth:/home/node/.auth:ro
+    env_file:
+      - /home/drosner/davebrain/.env
+    networks:
+      - brain
+
+networks:
+  brain:
+    driver: bridge
+
+volumes:
+  n8n_data:
+    driver: local

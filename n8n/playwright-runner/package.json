@@ -1,0 +1,10 @@
+{
+  "name": "playwright-runner",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright-core": "^1.52.0"
+  }
+}
+

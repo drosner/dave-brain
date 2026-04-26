@@ -1,6 +1,8 @@
 ﻿# Secrets - never commit these
 .env
 .env.*
+.auth/
+scripts/logs/
 token.json
 credentials.json
 sync-log.json

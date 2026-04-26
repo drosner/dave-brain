@@ -1,0 +1,37 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    env_file:
+      - .env
+    environment:
+      - TZ=America/New_York
+      - N8N_HOST=192.168.0.215
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://brain.local:5678
+      - N8N_PROXY_HOPS=1
+      - N8N_SECURE_COOKIE=false
+      - N8N_BLOCK_ENV_ACCESS_IN_CODE=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+
+  playwright-runner:
+    build:
+      context: ./playwright-runner
+      dockerfile: Dockerfile
+    image: local/playwright-runner:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PORT=3001
+      - PLAYWRIGHT_OUTPUT_DIR=/data
+      - PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ./playwright-output:/data
