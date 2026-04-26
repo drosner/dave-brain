@@ -24,11 +24,11 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       # Mount scripts dir so n8n Execute Command nodes can call them
-      - /home/drosner/davebrain/scripts:/scripts:ro
+      - /home/drosner/dave-brain/scripts:/scripts:ro
       # Mount .auth dir for Gmail credentials (read-only)
-      - /home/drosner/davebrain/.auth:/home/node/.auth:ro
+      - /home/drosner/dave-brain/.auth:/home/node/.auth:ro
     env_file:
-      - /home/drosner/davebrain/.env
+      - /home/drosner/dave-brain/.env
     networks:
       - brain
 
