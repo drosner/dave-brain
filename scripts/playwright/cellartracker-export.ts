@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
-import { chromium, Download, Page, Response } from "playwright";
+import { Browser, BrowserContext, chromium, Download, Page, Response } from "playwright";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +20,8 @@ const DEFAULT_OUTPUT_DIR = process.env.CELLARTRACKER_OUTPUT_DIR ||
 
 const CELLARTRACKER_USER = process.env.CT_USER || process.env.CELLARTRACKER_USER || "";
 const CELLARTRACKER_PASSWORD = process.env.CT_PASSWORD || process.env.CELLARTRACKER_PASSWORD || "";
+const CHROMIUM_EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH ||
+  (process.platform === "win32" ? undefined : "/usr/bin/chromium");
 
 export interface CellarTrackerExportOptions {
   table?: string;
@@ -45,6 +47,18 @@ export interface CellarTrackerExportResult {
   rows?: Record<string, string>[];
   rowCount?: number;
   source?: "direct-url" | "inventory-ui";
+}
+
+function buildLaunchOptions(headless: boolean) {
+  return {
+    headless,
+    executablePath: CHROMIUM_EXECUTABLE_PATH,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  };
 }
 
 function timestampForFile(date: Date): string {
@@ -327,25 +341,19 @@ export async function runCellarTrackerExport(
   };
 
   await ensureDir(options.outputDir);
-
-  const browser = await chromium.launch({
-    headless: options.headless,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await browser.newContext({
-    acceptDownloads: true,
-    viewport: { width: 1440, height: 960 },
-  });
-
-  const page = await context.newPage();
   const ranAt = new Date();
+  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
+  let page: Page | null = null;
 
   try {
+    browser = await chromium.launch(buildLaunchOptions(options.headless));
+    context = await browser.newContext({
+      acceptDownloads: true,
+      viewport: { width: 1440, height: 960 },
+    });
+    page = await context.newPage();
+
     await loginToCellarTracker(page, options.timeoutMs);
     const { download, response } = await triggerExport(page, options);
     const defaultName = `cellartracker-${options.table.toLowerCase()}`;
@@ -384,7 +392,9 @@ export async function runCellarTrackerExport(
       source: "direct-url",
     };
   } catch (error) {
-    await saveFailureScreenshot(page, options.outputDir);
+    if (page) {
+      await saveFailureScreenshot(page, options.outputDir);
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       status: "error",
@@ -393,8 +403,12 @@ export async function runCellarTrackerExport(
       table: options.table,
     };
   } finally {
-    await context.close();
-    await browser.close();
+    if (context) {
+      await context.close();
+    }
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
@@ -415,25 +429,19 @@ export async function runCellarTrackerInventoryExportTest(
   };
 
   await ensureDir(options.outputDir);
-
-  const browser = await chromium.launch({
-    headless: options.headless,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await browser.newContext({
-    acceptDownloads: true,
-    viewport: { width: 1440, height: 960 },
-  });
-
-  const page = await context.newPage();
   const ranAt = new Date();
+  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
+  let page: Page | null = null;
 
   try {
+    browser = await chromium.launch(buildLaunchOptions(options.headless));
+    context = await browser.newContext({
+      acceptDownloads: true,
+      viewport: { width: 1440, height: 960 },
+    });
+    page = await context.newPage();
+
     await loginToCellarTracker(page, options.timeoutMs);
     const { download, response } = await exportFromInventoryUi(page, options);
 
@@ -476,7 +484,9 @@ export async function runCellarTrackerInventoryExportTest(
       source: "inventory-ui",
     };
   } catch (error) {
-    await saveFailureScreenshot(page, options.outputDir);
+    if (page) {
+      await saveFailureScreenshot(page, options.outputDir);
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       status: "error",
@@ -486,8 +496,12 @@ export async function runCellarTrackerInventoryExportTest(
       source: "inventory-ui",
     };
   } finally {
-    await context.close();
-    await browser.close();
+    if (context) {
+      await context.close();
+    }
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
