@@ -24,7 +24,7 @@ const CHROMIUM_EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH ||
   (process.platform === "win32" ? undefined : "/usr/bin/chromium");
 const CHROMIUM_CDP_URL = process.env.CHROMIUM_CDP_URL || "";
 const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const HOME_URL = "https://www.cellartracker.com";
 const LOGIN_URL = "https://www.cellartracker.com/password.asp";
 
@@ -103,8 +103,8 @@ function sleep(minMs: number, maxMs: number): Promise<void> {
 async function openBrowserSession(headless: boolean): Promise<BrowserSession> {
   if (CHROMIUM_CDP_URL) {
     const browser = await chromium.connectOverCDP(CHROMIUM_CDP_URL);
-    const context = browser.contexts()[0] ?? await buildContext(browser);
-    const page = context.pages()[0] ?? await context.newPage();
+    const context = await buildContext(browser);
+    const page = await context.newPage();
     return { browser, context, page, owned: false };
   }
 
