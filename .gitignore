@@ -28,4 +28,5 @@ wine-scanner/server.log
 
 # Playwright runner
 scripts/playwright/node_modules/
+scripts/playwright/.npm-cache/
 scripts/logs/cellartracker-exports/
