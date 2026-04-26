@@ -29,6 +29,7 @@ export interface CellarTrackerExportOptions {
   headless?: boolean;
   timeoutMs?: number;
   includeContent?: boolean;
+  parseRows?: boolean;
 }
 
 export interface CellarTrackerExportResult {
@@ -40,6 +41,10 @@ export interface CellarTrackerExportResult {
   table?: string;
   bytes?: number;
   data?: string;
+  columns?: string[];
+  rows?: Record<string, string>[];
+  rowCount?: number;
+  source?: "direct-url" | "inventory-ui";
 }
 
 function timestampForFile(date: Date): string {
@@ -77,6 +82,87 @@ async function clickFirst(page: Page, selectors: string[]): Promise<boolean> {
     }
   }
   return false;
+}
+
+function parseCsvToObjects(raw: string): { columns: string[]; rows: Record<string, string>[] } {
+  if (!raw || !raw.trim()) {
+    return { columns: [], rows: [] };
+  }
+
+  const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const matrix: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let i = 0;
+  let inQuotes = false;
+
+  while (i < text.length) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i += 1;
+        continue;
+      }
+      field += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === ",") {
+      row.push(field);
+      field = "";
+      i += 1;
+      continue;
+    }
+
+    if (ch === "\n") {
+      row.push(field);
+      field = "";
+      matrix.push(row);
+      row = [];
+      i += 1;
+      continue;
+    }
+
+    field += ch;
+    i += 1;
+  }
+
+  row.push(field);
+  if (row.length > 1 || row[0] !== "") {
+    matrix.push(row);
+  }
+
+  if (!matrix.length) {
+    return { columns: [], rows: [] };
+  }
+
+  const columns = matrix[0].map((value) => String(value || "").trim());
+  const rows = matrix
+    .slice(1)
+    .filter((values) => values.some((value) => String(value || "").trim() !== ""))
+    .map((values) => {
+      const record: Record<string, string> = {};
+      columns.forEach((column, index) => {
+        record[column] = values[index] ?? "";
+      });
+      return record;
+    });
+
+  return { columns, rows };
 }
 
 async function fillFirst(page: Page, selectors: string[], value: string): Promise<boolean> {
@@ -145,6 +231,62 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   }
 }
 
+async function openInventoryPage(page: Page, timeoutMs: number): Promise<void> {
+  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", {
+    waitUntil: "domcontentloaded",
+    timeout: timeoutMs,
+  });
+
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+
+  const inventoryMarkers = [
+    "text=My Cellar",
+    "text=Inventory",
+    'a[href*="list.asp?Table=Inventory"]',
+    'form[action*="xlquery.asp"]',
+  ];
+
+  for (const selector of inventoryMarkers) {
+    if (await page.locator(selector).count()) {
+      return;
+    }
+  }
+
+  throw new Error("Inventory page did not load as expected after login");
+}
+
+async function exportFromInventoryUi(
+  page: Page,
+  options: Required<CellarTrackerExportOptions>,
+): Promise<{ download: Download | null; response: Response | null }> {
+  await openInventoryPage(page, options.timeoutMs);
+
+  const exportResponsePromise = page.waitForResponse((response) => {
+    return response.url().includes("xlquery.asp");
+  }, { timeout: options.timeoutMs }).catch(() => null);
+
+  const downloadPromise = page.waitForEvent("download", { timeout: options.timeoutMs }).catch(() => null);
+
+  const clicked = await clickFirst(page, [
+    'a[href*="xlquery.asp"]',
+    'a[href*="Format=csv"]',
+    'a:has-text("Export")',
+    'button:has-text("Export")',
+    'input[value*="Export"]',
+    'img[alt*="Export"]',
+    '[title*="Export"]',
+  ]);
+
+  if (!clicked) {
+    throw new Error("Could not find the CellarTracker export control on Inventory");
+  }
+
+  const download = await downloadPromise;
+  const response = await exportResponsePromise;
+
+  return { download, response };
+}
+
 async function triggerExport(
   page: Page,
   options: Required<CellarTrackerExportOptions>,
@@ -181,6 +323,7 @@ export async function runCellarTrackerExport(
     headless: input.headless ?? true,
     timeoutMs: input.timeoutMs || 120000,
     includeContent: input.includeContent ?? false,
+    parseRows: input.parseRows ?? false,
   };
 
   await ensureDir(options.outputDir);
@@ -238,6 +381,7 @@ export async function runCellarTrackerExport(
       table: options.table,
       bytes: stat.size,
       data,
+      source: "direct-url",
     };
   } catch (error) {
     await saveFailureScreenshot(page, options.outputDir);
@@ -247,6 +391,99 @@ export async function runCellarTrackerExport(
       message,
       ranAt: ranAt.toISOString(),
       table: options.table,
+    };
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+}
+
+export async function runCellarTrackerInventoryExportTest(
+  input: CellarTrackerExportOptions = {},
+): Promise<CellarTrackerExportResult> {
+  requireCredentials();
+
+  const options: Required<CellarTrackerExportOptions> = {
+    table: "Inventory",
+    bottleState: "",
+    format: input.format || "csv",
+    outputDir: input.outputDir || DEFAULT_OUTPUT_DIR,
+    headless: input.headless ?? true,
+    timeoutMs: input.timeoutMs || 120000,
+    includeContent: input.includeContent ?? true,
+    parseRows: input.parseRows ?? true,
+  };
+
+  await ensureDir(options.outputDir);
+
+  const browser = await chromium.launch({
+    headless: options.headless,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
+
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    viewport: { width: 1440, height: 960 },
+  });
+
+  const page = await context.newPage();
+  const ranAt = new Date();
+
+  try {
+    await loginToCellarTracker(page, options.timeoutMs);
+    const { download, response } = await exportFromInventoryUi(page, options);
+
+    const suggestedName = download?.suggestedFilename() || "cellartracker-inventory.csv";
+    const ext = path.extname(suggestedName) || ".csv";
+    const baseName = path.basename(suggestedName, ext) || "cellartracker-inventory";
+    const finalFileName = `${baseName}-${timestampForFile(ranAt)}${ext}`;
+    const finalPath = path.join(options.outputDir, finalFileName);
+
+    let data: string | undefined;
+
+    if (download) {
+      await download.saveAs(finalPath);
+    } else if (response) {
+      data = await response.text();
+      await fs.writeFile(finalPath, data, "utf8");
+    } else {
+      throw new Error("Inventory export did not produce a download or HTTP response");
+    }
+
+    if (options.includeContent && data == null) {
+      data = await fs.readFile(finalPath, "utf8");
+    }
+
+    const stat = await fs.stat(finalPath);
+    const parsed = options.parseRows && data ? parseCsvToObjects(data) : { columns: [], rows: [] };
+
+    return {
+      status: "success",
+      message: "CellarTracker inventory UI export complete",
+      ranAt: ranAt.toISOString(),
+      filePath: finalPath,
+      fileName: finalFileName,
+      table: "Inventory",
+      bytes: stat.size,
+      data,
+      columns: parsed.columns,
+      rows: parsed.rows,
+      rowCount: parsed.rows.length,
+      source: "inventory-ui",
+    };
+  } catch (error) {
+    await saveFailureScreenshot(page, options.outputDir);
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: "error",
+      message,
+      ranAt: ranAt.toISOString(),
+      table: "Inventory",
+      source: "inventory-ui",
     };
   } finally {
     await context.close();

@@ -2,7 +2,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import express from "express";
-import { runCellarTrackerExport } from "./cellartracker-export.ts";
+import {
+  runCellarTrackerExport,
+  runCellarTrackerInventoryExportTest,
+} from "./cellartracker-export.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +48,27 @@ app.post("/api/cellartracker/export", async (req, res) => {
     outputDir: req.body?.outputDir,
     headless: req.body?.headless,
     includeContent: req.body?.includeContent,
+  });
+
+  return res.status(result.status === "success" ? 200 : 500).json(result);
+});
+
+app.post("/api/cellartracker/inventory-export-test", async (req, res) => {
+  const token = req.header("x-api-key");
+  if (!token || token !== API_TOKEN) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized",
+      ranAt: new Date().toISOString(),
+    });
+  }
+
+  const result = await runCellarTrackerInventoryExportTest({
+    outputDir: req.body?.outputDir,
+    headless: req.body?.headless,
+    includeContent: req.body?.includeContent,
+    parseRows: req.body?.parseRows,
+    timeoutMs: req.body?.timeoutMs,
   });
 
   return res.status(result.status === "success" ? 200 : 500).json(result);

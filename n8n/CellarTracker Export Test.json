@@ -1,104 +1,98 @@
 {
-    "name":  "CellarTracker Export Test",
-    "nodes":  [
-                  {
-                      "parameters":  {
-
-                                     },
-                      "id":  "manual-trigger",
-                      "name":  "Manual Trigger",
-                      "type":  "n8n-nodes-base.manualTrigger",
-                      "typeVersion":  1,
-                      "position":  [
-                                       260,
-                                       300
-                                   ]
-                  },
-                  {
-                      "parameters":  {
-                                         "method":  "POST",
-                                         "url":  "http://playwright-runner:3002/api/cellartracker/export",
-                                         "sendHeaders":  true,
-                                         "headerParameters":  {
-                                                                  "parameters":  [
-                                                                                     {
-                                                                                         "name":  "x-api-key",
-                                                                                         "value":  "={{ $env.PLAYWRIGHT_API_TOKEN || \u0027\u0027 }}"
-                                                                                     }
-                                                                                 ]
-                                                              },
-                                         "sendBody":  true,
-                                         "specifyBody":  "json",
-                                         "jsonBody":  "={{ JSON.stringify({ table: \u0027Bottles\u0027, bottleState: \u00271\u0027, format: \u0027csv\u0027, includeContent: true }) }}",
-                                         "options":  {
-                                                         "response":  {
-                                                                          "response":  {
-                                                                                           "responseFormat":  "json"
-                                                                                       }
-                                                                      },
-                                                         "timeout":  180000
-                                                     }
-                                     },
-                      "id":  "call-export-runner",
-                      "name":  "Run CellarTracker Export",
-                      "type":  "n8n-nodes-base.httpRequest",
-                      "typeVersion":  4.2,
-                      "position":  [
-                                       540,
-                                       300
-                                   ]
-                  },
-                  {
-                      "parameters":  {
-                                         "jsCode":  "const result = $json;\nif (result.status !== \u0027success\u0027) {\n  throw new Error(result.message || \u0027CellarTracker export failed\u0027);\n}\nreturn [{ json: {\n  status: result.status,\n  message: result.message,\n  filePath: result.filePath,\n  fileName: result.fileName,\n  bytes: result.bytes,\n  ranAt: result.ranAt,\n  summary: `Exported ${result.fileName} (${result.bytes || 0} bytes)`\n} }];"
-                                     },
-                      "id":  "summarize-export",
-                      "name":  "Summarize Export",
-                      "type":  "n8n-nodes-base.code",
-                      "typeVersion":  2,
-                      "position":  [
-                                       820,
-                                       300
-                                   ]
-                  }
-              ],
-    "pinData":  {
-
-                },
-    "connections":  {
-                        "Manual Trigger":  {
-                                               "main":  [
-                                                            [
-                                                                {
-                                                                    "node":  "Run CellarTracker Export",
-                                                                    "type":  "main",
-                                                                    "index":  0
-                                                                }
-                                                            ]
-                                                        ]
-                                           },
-                        "Run CellarTracker Export":  {
-                                                         "main":  [
-                                                                      [
-                                                                          {
-                                                                              "node":  "Summarize Export",
-                                                                              "type":  "main",
-                                                                              "index":  0
-                                                                          }
-                                                                      ]
-                                                                  ]
-                                                     }
-                    },
-    "active":  false,
-    "settings":  {
-                     "executionOrder":  "v1"
-                 },
-    "versionId":  "cellartracker-export-test-v1",
-    "meta":  {
-                 "templateCredsSetupCompleted":  true
-             },
-    "id":  "cellartracker-export-test",
-    "tags":  [
-
-             ]
+  "name": "CellarTracker Inventory UI Export Test",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://playwright-runner:3002/api/cellartracker/inventory-export-test",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.PLAYWRIGHT_API_TOKEN || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ headless: true, includeContent: false, parseRows: true, timeoutMs: 180000 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 240000
+        }
+      },
+      "id": "call-inventory-export-test",
+      "name": "Run Inventory Export Test",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $json;\nif (result.status !== 'success') {\n  throw new Error(result.message || 'CellarTracker inventory export test failed');\n}\n\nconst rows = Array.isArray(result.rows) ? result.rows : [];\nconst preview = rows.slice(0, 3);\n\nreturn [{ json: {\n  status: result.status,\n  source: result.source,\n  message: result.message,\n  ranAt: result.ranAt,\n  filePath: result.filePath,\n  fileName: result.fileName,\n  bytes: result.bytes,\n  rowCount: result.rowCount || rows.length,\n  columnCount: Array.isArray(result.columns) ? result.columns.length : 0,\n  columns: result.columns || [],\n  preview,\n  summary: `Inventory UI export returned ${result.rowCount || rows.length} rows and ${(result.columns || []).length} columns`\n} }];"
+      },
+      "id": "summarize-test-result",
+      "name": "Summarize Test Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Inventory Export Test",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Inventory Export Test": {
+      "main": [
+        [
+          {
+            "node": "Summarize Test Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "cellartracker-inventory-ui-export-test-v1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "cellartracker-inventory-ui-export-test",
+  "tags": []
 }
