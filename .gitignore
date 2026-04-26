@@ -9,6 +9,7 @@ sync-log.json
 
 # Deno
 .deno/
+deno.lock
 
 # VS Code
 .vscode/settings.json
