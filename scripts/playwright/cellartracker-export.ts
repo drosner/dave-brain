@@ -298,7 +298,7 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
     timeout: timeoutMs,
   });
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
   await sleep(1500, 3000);
 
   await page.goto(LOGIN_URL, {
@@ -306,8 +306,8 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
     timeout: timeoutMs,
   });
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
-  await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
+  await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => { });
 
   const filledUser = await fillFirst(page, [
     'input[name="szUser"]',
@@ -359,7 +359,7 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   }
 
   await navigationPromise;
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
 
   const currentUrl = page.url().toLowerCase();
   const loginStillVisible = await page.locator('input[name="Password"], input[type="password"]').count();
@@ -375,7 +375,7 @@ async function openInventoryPage(page: Page, timeoutMs: number): Promise<void> {
     timeout: timeoutMs,
   });
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
 
   const inventoryMarkers = [
     "text=My Cellar",
