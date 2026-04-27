@@ -299,12 +299,11 @@ async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; p
 }
 
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
+  // Mirrors cellartracker-signin.ts exactly — that flow is confirmed working.
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await sleep(1500, 3000);
 
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-
-  // Wait specifically for the username field — same approach as cellartracker-signin.ts.
   await page.locator('input[name="szUser"]').waitFor({ timeout: 10000 });
 
   await page.locator('input[name="szUser"]').fill(CELLARTRACKER_USER);
@@ -316,10 +315,15 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs });
   await sleep(1000, 2000);
 
-  // CellarTracker login page is password.asp — if we're still there, login failed.
-  const currentUrl = page.url();
-  if (currentUrl.includes("password.asp")) {
-    throw new Error("CellarTracker login failed — still on login page. Check CT_USER and CT_PASSWORD.");
+  // Navigate to inventory and verify — same final step as cellartracker-signin.ts.
+  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", {
+    waitUntil: "networkidle",
+    timeout: 30000,
+  });
+
+  const title = await page.title();
+  if (title.includes("ERROR") || title.includes("Sign In")) {
+    throw new Error(`CellarTracker login failed — unexpected page after login: "${title}"`);
   }
 }
 
@@ -558,7 +562,8 @@ export async function runCellarTrackerExport(
     ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
-    const { download, response } = await triggerExport(page, options);
+    // Login lands on inventory page — use UI export from there (same path as signin.ts).
+    const { download, response } = await exportFromInventoryUi(page, options);
     const defaultName = `cellartracker-${options.table.toLowerCase()}`;
     const suggestedName = download?.suggestedFilename() || `${defaultName}.csv`;
     const ext = path.extname(suggestedName) || ".csv";
