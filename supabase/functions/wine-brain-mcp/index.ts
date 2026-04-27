@@ -322,6 +322,77 @@ function buildServer() {
   );
 
   server.registerTool(
+    'upsert_bottles_batch',
+    {
+      title: 'Upsert Bottles Batch',
+      description: 'Bulk upsert wine and bottle records from a CellarTracker export. Upserts wines table on ct_iwine, then bottles table on ct_barcode. Use after a CellarTracker CSV export to sync inventory.',
+      inputSchema: {
+        bottles: z.array(z.object({
+          ct_barcode: z.string(),
+          ct_iwine: z.number().int(),
+          wine: z.string(),
+          vintage: z.number().int().nullable().optional(),
+          producer: z.string().nullable().optional(),
+          drink_from: z.number().int().nullable().optional(),
+          drink_to: z.number().int().nullable().optional(),
+          location: z.string().nullable().optional(),
+          bin: z.string().nullable().optional(),
+          purchase_date: z.string().nullable().optional(),
+          bottle_cost: z.number().nullable().optional(),
+        })).min(1).max(2000),
+      },
+    },
+    async ({ bottles }) => {
+      // Upsert unique wines first (keyed on ct_iwine)
+      const wineMap = new Map<number, Record<string, unknown>>();
+      for (const b of bottles) {
+        if (!wineMap.has(b.ct_iwine)) {
+          wineMap.set(b.ct_iwine, {
+            ct_iwine: b.ct_iwine,
+            wine: b.wine,
+            vintage: b.vintage ?? null,
+            producer: b.producer ?? null,
+            drink_from: b.drink_from ?? null,
+            drink_to: b.drink_to ?? null,
+          });
+        }
+      }
+
+      const wineRows = Array.from(wineMap.values());
+      const { error: wineErr } = await supabase
+        .from('wines')
+        .upsert(wineRows, { onConflict: 'ct_iwine', ignoreDuplicates: false });
+      if (wineErr) throw new Error(`wines upsert failed: ${wineErr.message}`);
+
+      // Upsert bottle records (keyed on ct_barcode)
+      const bottleRows = bottles.map((b) => ({
+        ct_barcode: b.ct_barcode,
+        ct_iwine: b.ct_iwine,
+        location: b.location ?? null,
+        bin: b.bin ?? null,
+        purchase_date: b.purchase_date ?? null,
+        bottle_cost: b.bottle_cost ?? null,
+        removed_at: null,
+      }));
+
+      const { error: bottleErr } = await supabase
+        .from('bottles')
+        .upsert(bottleRows, { onConflict: 'ct_barcode', ignoreDuplicates: false });
+      if (bottleErr) throw new Error(`bottles upsert failed: ${bottleErr.message}`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            wines_upserted: wineRows.length,
+            bottles_upserted: bottleRows.length,
+          }),
+        }],
+      };
+    },
+  );
+
+  server.registerTool(
     'search_preferences',
     {
       title: 'Search Preferences',

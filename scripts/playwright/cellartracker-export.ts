@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { Browser, BrowserContext, chromium, Download, Page, Response } from "playwright";
+import { mcpCall } from "../utils/mcp-client.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,9 @@ const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
 const HOME_URL = "https://www.cellartracker.com";
 const LOGIN_URL = "https://www.cellartracker.com/password.asp";
 
+const WINE_BRAIN_MCP_URL = process.env.WINE_BRAIN_MCP_URL || "";
+const WINE_BRAIN_MCP_KEY = process.env.WINE_BRAIN_MCP_KEY || "";
+
 export interface CellarTrackerExportOptions {
   table?: string;
   bottleState?: string;
@@ -37,6 +41,7 @@ export interface CellarTrackerExportOptions {
   timeoutMs?: number;
   includeContent?: boolean;
   parseRows?: boolean;
+  syncToWineBrain?: boolean;
 }
 
 export interface CellarTrackerExportResult {
@@ -52,6 +57,7 @@ export interface CellarTrackerExportResult {
   rows?: Record<string, string>[];
   rowCount?: number;
   source?: "direct-url" | "inventory-ui";
+  wineBrainSync?: { wines_upserted: number; bottles_upserted: number } | { error: string };
 }
 
 interface BrowserSession {
@@ -446,6 +452,129 @@ async function triggerExport(
   return { download, response };
 }
 
+// CellarTracker CSV column names vary slightly — try each alias in order.
+function col(row: Record<string, string>, ...keys: string[]): string {
+  for (const k of keys) {
+    if (row[k] !== undefined) return row[k];
+    // case-insensitive fallback
+    const lower = k.toLowerCase();
+    for (const rk of Object.keys(row)) {
+      if (rk.toLowerCase() === lower) return row[rk];
+    }
+  }
+  return "";
+}
+
+function toInt(v: string): number | null {
+  const n = parseInt(v, 10);
+  return isNaN(n) || n === 0 ? null : n;
+}
+
+function toFloat(v: string): number | null {
+  const n = parseFloat(v.replace(/[^0-9.-]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function toDate(v: string): string | null {
+  if (!v) return null;
+  // CellarTracker dates: M/D/YYYY or YYYY-MM-DD
+  const mdy = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return `${mdy[3]}-${String(mdy[1]).padStart(2, "0")}-${String(mdy[2]).padStart(2, "0")}`;
+  const iso = v.match(/^\d{4}-\d{2}-\d{2}$/);
+  if (iso) return v;
+  return null;
+}
+
+interface BottleInput {
+  ct_barcode: string;
+  ct_iwine: number;
+  wine: string;
+  vintage: number | null;
+  producer: string | null;
+  drink_from: number | null;
+  drink_to: number | null;
+  location: string | null;
+  bin: string | null;
+  purchase_date: string | null;
+  bottle_cost: number | null;
+}
+
+function mapRowsToBottleInputs(rows: Record<string, string>[]): BottleInput[] {
+  const bottles: BottleInput[] = [];
+  for (const row of rows) {
+    const iWineStr = col(row, "iWine", "iwine");
+    const iWine = parseInt(iWineStr, 10);
+    if (!iWine) continue;
+
+    const barcodeRaw = col(row, "Barcode", "barcode", "WineBarcode");
+    const qtyStr = col(row, "Qty", "qty", "Quantity");
+    const qty = Math.max(1, parseInt(qtyStr, 10) || 1);
+    const wine = col(row, "Wine", "wine");
+    const vintage = toInt(col(row, "Vintage", "vintage"));
+    const producer = col(row, "Producer", "producer") || null;
+    const location = col(row, "Location", "location") || null;
+    const bin = col(row, "Bin", "bin") || null;
+    const purchase_date = toDate(col(row, "Date", "DateAcquired", "date", "PurchaseDate"));
+    const bottle_cost = toFloat(col(row, "Price", "PricePaid", "price"));
+    const drink_from = toInt(col(row, "BeginConsume", "DrinkFromYear", "DrinkFrom", "begin_consume"));
+    const drink_to = toInt(col(row, "EndConsume", "DrinkToYear", "DrinkTo", "end_consume"));
+
+    for (let i = 0; i < qty; i++) {
+      // Use the exported barcode for first bottle; synthesize for extras.
+      const ct_barcode = barcodeRaw && i === 0
+        ? barcodeRaw
+        : `iwine-${iWine}-b${i}`;
+
+      bottles.push({
+        ct_barcode,
+        ct_iwine: iWine,
+        wine,
+        vintage,
+        producer,
+        drink_from,
+        drink_to,
+        location,
+        bin,
+        purchase_date,
+        bottle_cost,
+      });
+    }
+  }
+  return bottles;
+}
+
+async function syncBottlesToWineBrain(
+  rows: Record<string, string>[],
+): Promise<{ wines_upserted: number; bottles_upserted: number } | { error: string }> {
+  if (!WINE_BRAIN_MCP_URL || !WINE_BRAIN_MCP_KEY) {
+    return { error: "WINE_BRAIN_MCP_URL or WINE_BRAIN_MCP_KEY not set — skipping sync" };
+  }
+
+  const bottles = mapRowsToBottleInputs(rows);
+  if (!bottles.length) {
+    return { error: "No valid bottle rows to sync" };
+  }
+
+  // Send in chunks of 500 to stay within MCP payload limits.
+  const CHUNK = 500;
+  let wines_upserted = 0;
+  let bottles_upserted = 0;
+
+  for (let i = 0; i < bottles.length; i += CHUNK) {
+    const chunk = bottles.slice(i, i + CHUNK);
+    const result = await mcpCall(
+      WINE_BRAIN_MCP_URL,
+      WINE_BRAIN_MCP_KEY,
+      "upsert_bottles_batch",
+      { bottles: chunk },
+    ) as { wines_upserted: number; bottles_upserted: number };
+    wines_upserted += result.wines_upserted ?? 0;
+    bottles_upserted += result.bottles_upserted ?? 0;
+  }
+
+  return { wines_upserted, bottles_upserted };
+}
+
 export async function runCellarTrackerExport(
   input: CellarTrackerExportOptions = {},
 ): Promise<CellarTrackerExportResult> {
@@ -453,6 +582,7 @@ export async function runCellarTrackerExport(
   const table = input.table || "Bottles";
   const bottleState = input.bottleState ?? (table === "Bottles" ? "1" : "");
 
+  const syncToWineBrain = input.syncToWineBrain ?? false;
   const options: Required<CellarTrackerExportOptions> = {
     table,
     bottleState,
@@ -461,7 +591,8 @@ export async function runCellarTrackerExport(
     headless: input.headless ?? true,
     timeoutMs: input.timeoutMs || 120000,
     includeContent: input.includeContent ?? false,
-    parseRows: input.parseRows ?? false,
+    parseRows: input.parseRows ?? syncToWineBrain,
+    syncToWineBrain,
   };
 
   await ensureDir(options.outputDir);
@@ -503,6 +634,10 @@ export async function runCellarTrackerExport(
     }
 
     const stat = await fs.stat(finalPath);
+    const parsed = options.parseRows && data ? parseCsvToObjects(data) : undefined;
+    const wineBrainSync = options.syncToWineBrain && parsed?.rows.length
+      ? await syncBottlesToWineBrain(parsed.rows)
+      : undefined;
 
     return {
       status: "success",
@@ -513,6 +648,10 @@ export async function runCellarTrackerExport(
       table: options.table,
       bytes: stat.size,
       data,
+      columns: parsed?.columns,
+      rows: parsed?.rows,
+      rowCount: parsed?.rows.length,
+      wineBrainSync,
       source: "direct-url",
     };
   } catch (error) {
