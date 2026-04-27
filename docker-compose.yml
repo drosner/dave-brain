@@ -18,6 +18,8 @@ services:
       # Timezone
       - GENERIC_TIMEZONE=America/New_York
       - TZ=America/New_York
+      # Allow workflow nodes to read env vars via $env.*
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       # Data path
       - N8N_USER_FOLDER=/home/node/.n8n
     volumes:
