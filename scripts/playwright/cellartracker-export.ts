@@ -531,8 +531,8 @@ export async function runCellarTrackerExport(
   input: CellarTrackerExportOptions = {},
 ): Promise<CellarTrackerExportResult> {
   requireCredentials();
-  const table = input.table || "Bottles";
-  const bottleState = input.bottleState ?? (table === "Bottles" ? "1" : "");
+  const table = input.table || "Inventory";
+  const bottleState = input.bottleState ?? "";
 
   const syncToWineBrain = input.syncToWineBrain ?? false;
   const options: Required<CellarTrackerExportOptions> = {
@@ -562,8 +562,7 @@ export async function runCellarTrackerExport(
     ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
-    // Login lands on inventory page — use UI export from there (same path as signin.ts).
-    const { download, response } = await exportFromInventoryUi(page, options);
+    const { download, response } = await triggerExport(page, options);
     const defaultName = `cellartracker-${options.table.toLowerCase()}`;
     const suggestedName = download?.suggestedFilename() || `${defaultName}.csv`;
     const ext = path.extname(suggestedName) || ".csv";
@@ -642,6 +641,7 @@ export async function runCellarTrackerInventoryExportTest(
     timeoutMs: input.timeoutMs || 120000,
     includeContent: input.includeContent ?? true,
     parseRows: input.parseRows ?? true,
+    syncToWineBrain: false,
   };
 
   await ensureDir(options.outputDir);
@@ -659,7 +659,7 @@ export async function runCellarTrackerInventoryExportTest(
     ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
-    const { download, response } = await exportFromInventoryUi(page, options);
+    const { download, response } = await triggerExport(page, options);
 
     const suggestedName = download?.suggestedFilename() || "cellartracker-inventory.csv";
     const ext = path.extname(suggestedName) || ".csv";
