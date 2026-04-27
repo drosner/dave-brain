@@ -30,3 +30,9 @@ wine-scanner/server.log
 scripts/playwright/node_modules/
 scripts/playwright/.npm-cache/
 scripts/logs/cellartracker-exports/
+
+# Claude Code session data
+.claude/
+
+# Supabase CLI temp files
+supabase/.temp/
