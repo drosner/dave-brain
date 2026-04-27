@@ -2,9 +2,15 @@
 .env
 .env.*
 .auth/
+.codex-ssh/
+.codex-ssh-known_hosts
 scripts/logs/
 token.json
 credentials.json
+credentials*.json
+*backup*.json
+n8n-backups/
+.n8n/
 sync-log.json
 
 # Deno
