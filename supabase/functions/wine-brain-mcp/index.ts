@@ -328,17 +328,37 @@ function buildServer() {
       description: 'Bulk upsert wine and bottle records from a CellarTracker export. Upserts wines table on ct_iwine, then bottles table on ct_barcode. Use after a CellarTracker CSV export to sync inventory.',
       inputSchema: {
         bottles: z.array(z.object({
+          // identity
           ct_barcode: z.string(),
           ct_iwine: z.number().int(),
+          // wine-level fields
           wine: z.string(),
           vintage: z.number().int().nullable().optional(),
           producer: z.string().nullable().optional(),
+          wine_type: z.string().nullable().optional(),
+          color: z.string().nullable().optional(),
+          varietal: z.string().nullable().optional(),
+          master_varietal: z.string().nullable().optional(),
+          designation: z.string().nullable().optional(),
+          vineyard: z.string().nullable().optional(),
+          appellation: z.string().nullable().optional(),
+          region: z.string().nullable().optional(),
+          sub_region: z.string().nullable().optional(),
+          country: z.string().nullable().optional(),
+          locale: z.string().nullable().optional(),
+          bottle_size: z.string().nullable().optional(),
           drink_from: z.number().int().nullable().optional(),
           drink_to: z.number().int().nullable().optional(),
+          // bottle-level fields
           location: z.string().nullable().optional(),
           bin: z.string().nullable().optional(),
+          store: z.string().nullable().optional(),
           purchase_date: z.string().nullable().optional(),
           bottle_cost: z.number().nullable().optional(),
+          bottle_cost_currency: z.string().nullable().optional(),
+          bottle_note: z.string().nullable().optional(),
+          // full raw row — stores valuation, critic scores, community data, etc.
+          raw_ct_row: z.record(z.unknown()).nullable().optional(),
         })).min(1).max(2000),
       },
     },
@@ -352,6 +372,18 @@ function buildServer() {
             wine: b.wine,
             vintage: b.vintage ?? null,
             producer: b.producer ?? null,
+            wine_type: b.wine_type ?? null,
+            color: b.color ?? null,
+            varietal: b.varietal ?? null,
+            master_varietal: b.master_varietal ?? null,
+            designation: b.designation ?? null,
+            vineyard: b.vineyard ?? null,
+            appellation: b.appellation ?? null,
+            region: b.region ?? null,
+            sub_region: b.sub_region ?? null,
+            country: b.country ?? null,
+            locale: b.locale ?? null,
+            bottle_size: b.bottle_size ?? null,
             drink_from: b.drink_from ?? null,
             drink_to: b.drink_to ?? null,
           });
@@ -364,15 +396,19 @@ function buildServer() {
         .upsert(wineRows, { onConflict: 'ct_iwine', ignoreDuplicates: false });
       if (wineErr) throw new Error(`wines upsert failed: ${wineErr.message}`);
 
-      // Upsert bottle records (keyed on ct_barcode)
       const bottleRows = bottles.map((b) => ({
         ct_barcode: b.ct_barcode,
         ct_iwine: b.ct_iwine,
         location: b.location ?? null,
         bin: b.bin ?? null,
+        store: b.store ?? null,
         purchase_date: b.purchase_date ?? null,
         bottle_cost: b.bottle_cost ?? null,
+        bottle_cost_currency: b.bottle_cost_currency ?? null,
+        bottle_note: b.bottle_note ?? null,
+        raw_ct_row: b.raw_ct_row ?? null,
         removed_at: null,
+        last_synced_at: new Date().toISOString(),
       }));
 
       const { error: bottleErr } = await supabase

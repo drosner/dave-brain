@@ -476,12 +476,28 @@ interface BottleInput {
   wine: string;
   vintage: number | null;
   producer: string | null;
+  wine_type: string | null;
+  color: string | null;
+  varietal: string | null;
+  master_varietal: string | null;
+  designation: string | null;
+  vineyard: string | null;
+  appellation: string | null;
+  region: string | null;
+  sub_region: string | null;
+  country: string | null;
+  locale: string | null;
+  bottle_size: string | null;
   drink_from: number | null;
   drink_to: number | null;
   location: string | null;
   bin: string | null;
+  store: string | null;
   purchase_date: string | null;
   bottle_cost: number | null;
+  bottle_cost_currency: string | null;
+  bottle_note: string | null;
+  raw_ct_row: Record<string, unknown>;
 }
 
 function mapRowsToBottleInputs(rows: Record<string, string>[]): BottleInput[] {
@@ -492,38 +508,70 @@ function mapRowsToBottleInputs(rows: Record<string, string>[]): BottleInput[] {
     if (!iWine) continue;
 
     const barcodeRaw = col(row, "Barcode", "barcode", "WineBarcode");
-    const qtyStr = col(row, "Qty", "qty", "Quantity");
-    const qty = Math.max(1, parseInt(qtyStr, 10) || 1);
     const wine = col(row, "Wine", "wine");
     const vintage = toInt(col(row, "Vintage", "vintage"));
     const producer = col(row, "Producer", "producer") || null;
+    const wine_type = col(row, "Type", "wine_type") || null;
+    const color = col(row, "Color", "color") || null;
+    const varietal = col(row, "Varietal", "varietal") || null;
+    const master_varietal = col(row, "MasterVarietal", "master_varietal") || null;
+    const designation = col(row, "Designation", "designation") || null;
+    const vineyard = col(row, "Vineyard", "vineyard") || null;
+    const appellation = col(row, "Appellation", "appellation") || null;
+    const region = col(row, "Region", "region") || null;
+    const sub_region = col(row, "SubRegion", "sub_region") || null;
+    const country = col(row, "Country", "country") || null;
+    const locale = col(row, "Locale", "locale") || null;
+    const bottle_size = col(row, "Size", "size", "BottleSize") || null;
+    const drink_from = toInt(col(row, "BeginConsume", "DrinkFromYear", "DrinkFrom"));
+    const drink_to = toInt(col(row, "EndConsume", "DrinkToYear", "DrinkTo"));
     const location = col(row, "Location", "location") || null;
     const bin = col(row, "Bin", "bin") || null;
-    const purchase_date = toDate(col(row, "Date", "DateAcquired", "date", "PurchaseDate"));
-    const bottle_cost = toFloat(col(row, "Price", "PricePaid", "price"));
-    const drink_from = toInt(col(row, "BeginConsume", "DrinkFromYear", "DrinkFrom", "begin_consume"));
-    const drink_to = toInt(col(row, "EndConsume", "DrinkToYear", "DrinkTo", "end_consume"));
+    const store = col(row, "StoreName", "store", "Store") || null;
+    const purchase_date = toDate(col(row, "PurchaseDate", "Date", "DateAcquired"));
+    const bottle_cost = toFloat(col(row, "Price", "PricePaid"));
+    const bottle_cost_currency = col(row, "Currency", "currency") || null;
+    const bottle_note = col(row, "BottleNote", "bottle_note") || null;
 
-    for (let i = 0; i < qty; i++) {
-      // Use the exported barcode for first bottle; synthesize for extras.
-      const ct_barcode = barcodeRaw && i === 0
-        ? barcodeRaw
-        : `iwine-${iWine}-b${i}`;
-
-      bottles.push({
-        ct_barcode,
-        ct_iwine: iWine,
-        wine,
-        vintage,
-        producer,
-        drink_from,
-        drink_to,
-        location,
-        bin,
-        purchase_date,
-        bottle_cost,
-      });
+    // Store the full row as JSONB — preserves valuation, all critic scores, community data
+    const raw_ct_row: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (v !== "") raw_ct_row[k] = v;
     }
+
+    // CT exports one row per unique wine position; Qty is always 1 in Inventory export.
+    // Use barcode as-is; synthesize only if blank.
+    const ct_barcode = barcodeRaw || `iwine-${iWine}-pos${Object.keys(raw_ct_row).length}`;
+
+    bottles.push({
+      ct_barcode,
+      ct_iwine: iWine,
+      wine,
+      vintage,
+      producer,
+      wine_type,
+      color,
+      varietal,
+      master_varietal,
+      designation,
+      vineyard,
+      appellation,
+      region,
+      sub_region,
+      country,
+      locale,
+      bottle_size,
+      drink_from,
+      drink_to,
+      location,
+      bin,
+      store,
+      purchase_date,
+      bottle_cost,
+      bottle_cost_currency,
+      bottle_note,
+      raw_ct_row,
+    });
   }
   return bottles;
 }
