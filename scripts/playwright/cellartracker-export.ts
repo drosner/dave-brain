@@ -109,6 +109,13 @@ function sleep(minMs: number, maxMs: number): Promise<void> {
 async function openBrowserSession(headless: boolean): Promise<BrowserSession> {
   if (CHROMIUM_CDP_URL) {
     const browser = await chromium.connectOverCDP(CHROMIUM_CDP_URL);
+    // Prefer an existing context (may have live CellarTracker session/cookies)
+    const existingContexts = browser.contexts();
+    if (existingContexts.length > 0) {
+      const context = existingContexts[0];
+      const page = await context.newPage();
+      return { browser, context, page, owned: false };
+    }
     const context = await buildContext(browser);
     const page = await context.newPage();
     return { browser, context, page, owned: false };
@@ -298,8 +305,21 @@ async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; p
   return { user, password };
 }
 
+async function isLoggedIn(page: Page): Promise<boolean> {
+  try {
+    const resp = await page.request.get("https://www.cellartracker.com/xlquery.asp?Format=csv&Table=Inventory&iMax=1");
+    const text = await resp.text();
+    return resp.ok() && !text.includes("not logged into CellarTracker");
+  } catch {
+    return false;
+  }
+}
+
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
-  // Mirrors cellartracker-signin.ts exactly — that flow is confirmed working.
+  if (await isLoggedIn(page)) {
+    return;
+  }
+
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await sleep(1500, 3000);
 
@@ -315,15 +335,15 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
   await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs });
   await sleep(1000, 2000);
 
-  // Navigate to inventory and verify — same final step as cellartracker-signin.ts.
-  await page.goto("https://www.cellartracker.com/list.asp?Table=Inventory", {
-    waitUntil: "networkidle",
-    timeout: 30000,
-  });
-
-  const title = await page.title();
-  if (title.includes("ERROR") || title.includes("Sign In")) {
-    throw new Error(`CellarTracker login failed — unexpected page after login: "${title}"`);
+  const postSubmitUrl = page.url();
+  const postSubmitTitle = await page.title();
+  if (
+    postSubmitUrl.includes("password.asp") ||
+    postSubmitUrl.includes("search.asp") ||
+    postSubmitTitle.includes("ERROR") ||
+    postSubmitTitle.includes("Sign In")
+  ) {
+    throw new Error(`CellarTracker login failed — post-submit: title="${postSubmitTitle}" url=${postSubmitUrl}`);
   }
 }
 
