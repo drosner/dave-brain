@@ -320,30 +320,43 @@ async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void
     return;
   }
 
+  // Warm up the browser on CT's home page first (establishes cookies/fingerprint)
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await sleep(1500, 3000);
-
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await page.locator('input[name="szUser"]').waitFor({ timeout: 10000 });
-
-  await page.locator('input[name="szUser"]').fill(CELLARTRACKER_USER);
-  await sleep(500, 1200);
-  await page.locator('input[name="szPassword"]').fill(CELLARTRACKER_PASSWORD);
   await sleep(500, 1000);
 
-  await page.locator('input[type="submit"], button[type="submit"]').first().click();
-  await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs });
+  // Submit via in-page fetch() rather than CDP click — avoids WAF automation detection
+  const loginResult = await page.evaluate(
+    async ({ user, pass, loginUrl }) => {
+      const body = new URLSearchParams();
+      body.set("szUser", user);
+      body.set("szPassword", pass);
+      const res = await fetch(loginUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        credentials: "include",
+        redirect: "follow",
+      });
+      const text = await res.text();
+      return { status: res.status, url: res.url, snippet: text.slice(0, 200) };
+    },
+    { user: CELLARTRACKER_USER, pass: CELLARTRACKER_PASSWORD, loginUrl: LOGIN_URL },
+  );
+
+  if (loginResult.snippet.includes("not logged into CellarTracker") ||
+    loginResult.snippet.toLowerCase().includes("error") ||
+    loginResult.url.includes("password.asp") ||
+    loginResult.url.includes("search.asp")) {
+    throw new Error(`CellarTracker login fetch failed — url=${loginResult.url} snippet="${loginResult.snippet.slice(0, 100)}"`);
+  }
+
   await sleep(1000, 2000);
 
-  const postSubmitUrl = page.url();
-  const postSubmitTitle = await page.title();
-  if (
-    postSubmitUrl.includes("password.asp") ||
-    postSubmitUrl.includes("search.asp") ||
-    postSubmitTitle.includes("ERROR") ||
-    postSubmitTitle.includes("Sign In")
-  ) {
-    throw new Error(`CellarTracker login failed — post-submit: title="${postSubmitTitle}" url=${postSubmitUrl}`);
+  if (!(await isLoggedIn(page))) {
+    throw new Error("CellarTracker login completed but session check failed");
   }
 }
 
