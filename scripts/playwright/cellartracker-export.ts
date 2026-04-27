@@ -803,7 +803,11 @@ export async function runCellarTrackerInventoryExportTest(
 }
 
 if (process.argv[1] === __filename) {
-  runCellarTrackerExport()
+  const cliOptions: CellarTrackerExportOptions = {
+    syncToWineBrain: process.env.SYNC_TO_WINE_BRAIN === "true",
+    includeContent: process.env.INCLUDE_CONTENT === "true",
+  };
+  runCellarTrackerExport(cliOptions)
     .then((result) => {
       console.log(JSON.stringify(result));
       process.exit(result.status === "success" ? 0 : 1);
