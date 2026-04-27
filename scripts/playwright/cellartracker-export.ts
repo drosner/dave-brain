@@ -299,79 +299,27 @@ async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; p
 }
 
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
-  await page.goto(HOME_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: timeoutMs,
-  });
-
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
+  await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await sleep(1500, 3000);
 
-  await page.goto(LOGIN_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: timeoutMs,
-  });
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
-  await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => { });
+  // Wait specifically for the username field — same approach as cellartracker-signin.ts.
+  await page.locator('input[name="szUser"]').waitFor({ timeout: 10000 });
 
-  const filledUser = await fillFirst(page, [
-    'input[name="szUser"]',
-    'input[name="User"]',
-    'input[name="user"]',
-    'input[type="email"]',
-    "#User",
-    "#Email",
-  ], CELLARTRACKER_USER);
+  await page.locator('input[name="szUser"]').fill(CELLARTRACKER_USER);
+  await sleep(500, 1200);
+  await page.locator('input[name="szPassword"]').fill(CELLARTRACKER_PASSWORD);
+  await sleep(500, 1000);
 
-  const filledPassword = await fillFirst(page, [
-    'input[name="szPassword"]',
-    'input[name="Password"]',
-    'input[name="password"]',
-    'input[type="password"]',
-    "#Password",
-  ], CELLARTRACKER_PASSWORD);
+  await page.locator('input[type="submit"], button[type="submit"]').first().click();
+  await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs });
+  await sleep(1000, 2000);
 
-  let userOk = filledUser;
-  let passwordOk = filledPassword;
-
-  if (!userOk || !passwordOk) {
-    const fallback = await fillBestEffortLoginFields(page);
-    userOk = userOk || fallback.user;
-    passwordOk = passwordOk || fallback.password;
-  }
-
-  if (!userOk || !passwordOk) {
-    throw new Error("Could not find CellarTracker login form fields");
-  }
-
-  const navigationPromise = page.waitForNavigation({
-    waitUntil: "networkidle",
-    timeout: timeoutMs,
-  }).catch(() => null);
-
-  const clicked = await clickFirst(page, [
-    'input[name="btnLogin"]',
-    'input[type="submit"]',
-    'button[type="submit"]',
-    'input[value*="Log"]',
-    'input[value*="Sign"]',
-    'button:has-text("Sign in")',
-    'button:has-text("Log in")',
-  ]);
-
-  if (!clicked) {
-    throw new Error("Could not find CellarTracker submit button");
-  }
-
-  await navigationPromise;
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
-
-  const currentUrl = page.url().toLowerCase();
-  const loginStillVisible = await page.locator('input[name="Password"], input[type="password"]').count();
-
-  if (currentUrl.includes("signin") && loginStillVisible > 0) {
-    throw new Error("CellarTracker login did not complete. Check credentials or MFA requirements.");
+  // CellarTracker login page is password.asp — if we're still there, login failed.
+  const currentUrl = page.url();
+  if (currentUrl.includes("password.asp")) {
+    throw new Error("CellarTracker login failed — still on login page. Check CT_USER and CT_PASSWORD.");
   }
 }
 
