@@ -58,6 +58,85 @@ function errResponse(msg: string) {
   return { content: [{ type: "text" as const, text: msg }], isError: true };
 }
 
+function jsonResponse(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
+}
+
+async function sha256(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function contentFingerprint(text: string): Promise<string> {
+  return await sha256(text.toLowerCase().trim().replace(/\s+/g, " "));
+}
+
+async function lookupProjectId(projectName: string | null | undefined): Promise<string | null> {
+  if (!projectName) return null;
+  const { data } = await supabase.from("projects").select("id").ilike("name", projectName).limit(1);
+  return data?.[0]?.id || null;
+}
+
+function normalizeOrderStatus(status: string | null | undefined): string {
+  const statusMap: Record<string, string> = {
+    "out for delivery": "out_for_delivery",
+    "in transit": "in_transit",
+    "on the way": "in_transit",
+    "refunded": "returned",
+    "refund": "returned",
+    "return": "returned",
+    "returning": "returned",
+    "return initiated": "returned",
+    "canceled": "cancelled",
+    "canceled by buyer": "cancelled",
+    "canceled by seller": "cancelled",
+    "cancellation": "cancelled",
+    "out_for_delivery": "out_for_delivery",
+    "arrived": "delivered",
+    "complete": "delivered",
+    "completed": "delivered",
+    "dispatched": "shipped",
+    "label created": "ordered",
+    "payment received": "ordered",
+    "processing": "ordered",
+    "confirmed": "ordered",
+  };
+  const normalized = statusMap[String(status || "").toLowerCase()] || status || "ordered";
+  const validStatuses = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "returned", "cancelled"];
+  return validStatuses.includes(normalized) ? normalized : "ordered";
+}
+
+async function findExistingOrder(
+  orderNumber: string | null | undefined,
+  vendor: string | null | undefined,
+  trackingNumber: string | null | undefined,
+): Promise<{ id: string; thought_id: string | null; status: string } | null> {
+  if (orderNumber && vendor) {
+    const { data } = await supabase.from("orders")
+      .select("id, thought_id, status")
+      .eq("order_number", orderNumber)
+      .ilike("vendor", vendor)
+      .limit(1);
+    if (data?.[0]) return data[0];
+  }
+  if (orderNumber) {
+    const { data } = await supabase.from("orders")
+      .select("id, thought_id, status")
+      .eq("order_number", orderNumber)
+      .limit(1);
+    if (data?.[0]) return data[0];
+  }
+  if (trackingNumber) {
+    const { data } = await supabase.from("orders")
+      .select("id, thought_id, status")
+      .eq("tracking_number", trackingNumber)
+      .limit(1);
+    if (data?.[0]) return data[0];
+  }
+  return null;
+}
+
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
 const server = new McpServer({ name: "open-brain", version: "2.0.0" });
@@ -226,8 +305,154 @@ server.registerTool(
 );
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Tool 4b: gmail_insert_thought
+server.registerTool(
+  "gmail_insert_thought",
+  {
+    title: "Gmail Insert Thought",
+    description: "Insert a Gmail-derived thought with caller-provided metadata and embedding. Used by nightly Gmail ingestion.",
+    inputSchema: {
+      content: z.string(),
+      embedding: z.array(z.number()),
+      metadata: z.record(z.string(), z.unknown()),
+      content_fingerprint: z.string().optional(),
+    },
+  },
+  async ({ content, embedding, metadata, content_fingerprint }) => {
+    try {
+      const fingerprint = content_fingerprint || await contentFingerprint(content);
+      const row = { content, embedding, metadata, content_fingerprint: fingerprint };
+      const { data, error } = await supabase.from("thoughts").insert(row).select("id").single();
+
+      if (error?.code === "23505") return jsonResponse({ ok: true, duplicate: true });
+      if (error?.message?.includes("content_fingerprint")) {
+        const fallback = await supabase.from("thoughts")
+          .insert({ content, embedding, metadata })
+          .select("id")
+          .single();
+        if (fallback.error?.code === "23505") return jsonResponse({ ok: true, duplicate: true });
+        if (fallback.error) return jsonResponse({ ok: false, error: fallback.error.message });
+        return jsonResponse({ ok: true, id: fallback.data?.id });
+      }
+      if (error) return jsonResponse({ ok: false, error: error.message });
+
+      return jsonResponse({ ok: true, id: data?.id });
+    } catch (err: unknown) {
+      return jsonResponse({ ok: false, error: (err as Error).message });
+    }
+  },
+);
+
+// Tool 4c: gmail_upsert_person
+server.registerTool(
+  "gmail_upsert_person",
+  {
+    title: "Gmail Upsert Person",
+    description: "Upsert a contact seen during Gmail ingestion.",
+    inputSchema: {
+      name: z.string(),
+      email: z.string(),
+    },
+  },
+  async ({ name, email }) => {
+    try {
+      if (!email) return jsonResponse({ ok: true, skipped: true });
+      const { error } = await supabase.from("people")
+        .upsert({ name: name || email, email, type: "contact" }, { onConflict: "email", ignoreDuplicates: true });
+      if (error) return jsonResponse({ ok: false, error: error.message });
+      return jsonResponse({ ok: true });
+    } catch (err: unknown) {
+      return jsonResponse({ ok: false, error: (err as Error).message });
+    }
+  },
+);
+
 // ORDERS  (new)
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Tool 5a: gmail_upsert_order
+server.registerTool(
+  "gmail_upsert_order",
+  {
+    title: "Gmail Upsert Order",
+    description: "Create or update an order extracted from Gmail.",
+    inputSchema: {
+      order: z.record(z.string(), z.unknown()),
+      email_date: z.string(),
+      email_id: z.string(),
+    },
+  },
+  async ({ order, email_date, email_id }) => {
+    try {
+      const status = normalizeOrderStatus(String(order.status || "ordered"));
+      const existing = await findExistingOrder(
+        order.order_number as string | null,
+        order.vendor as string | null,
+        order.tracking_number as string | null,
+      );
+
+      if (existing) {
+        const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+        const statusRank: Record<string, number> = { ordered: 0, shipped: 1, in_transit: 2, out_for_delivery: 3, delivered: 4, returned: 5, cancelled: 6 };
+        if ((statusRank[status] ?? 0) > (statusRank[existing.status] ?? 0)) updates.status = status;
+        if (order.tracking_number) {
+          updates.tracking_number = order.tracking_number;
+          if (order.tracking_carrier) updates.tracking_carrier = order.tracking_carrier;
+          if (order.tracking_url) updates.tracking_url = order.tracking_url;
+        }
+        if (order.email_type === "delivery_confirmation" || order.email_type === "carrier_delivery_confirmation") {
+          updates.actual_delivery = order.actual_delivery || email_date.split("T")[0];
+          updates.status = "delivered";
+        }
+        if (order.estimated_delivery) updates.estimated_delivery = order.estimated_delivery;
+        if (order.amount) updates.amount = order.amount;
+
+        const { data: existingRow } = await supabase.from("orders").select("metadata").eq("id", existing.id).single();
+        const existingMeta = (existingRow?.metadata || {}) as Record<string, unknown>;
+        const emailHistory = (existingMeta.email_history as string[] || []);
+        emailHistory.push(`${order.email_type}:${email_id}:${email_date.split("T")[0]}`);
+        updates.metadata = { ...existingMeta, email_history: emailHistory, last_email_type: order.email_type };
+
+        const { error } = await supabase.from("orders").update(updates).eq("id", existing.id);
+        if (error) return jsonResponse({ ok: false, error: `Update failed: ${error.message}` });
+        return jsonResponse({ ok: true, id: existing.id, action: "updated" });
+      }
+
+      const projectId = await lookupProjectId(order.project as string | null);
+      const orderRow: Record<string, unknown> = {
+        item_description: order.item_description || `Package via ${order.vendor || "carrier"}`,
+        vendor: order.vendor,
+        order_number: order.order_number,
+        order_date: email_date.split("T")[0],
+        estimated_delivery: order.estimated_delivery,
+        actual_delivery: order.actual_delivery,
+        amount: order.amount,
+        currency: order.currency || "USD",
+        status,
+        tracking_number: order.tracking_number,
+        tracking_carrier: order.tracking_carrier,
+        tracking_url: order.tracking_url,
+        category: order.category || "personal",
+        project: order.project,
+        project_id: projectId,
+        source: "gmail",
+        source_email_id: email_id,
+        metadata: {
+          items_list: order.items_list || [],
+          email_history: [`${order.email_type}:${email_id}:${email_date.split("T")[0]}`],
+          last_email_type: order.email_type,
+        },
+      };
+
+      const { data, error } = await supabase.from("orders").insert(orderRow).select("id").single();
+      if (error?.code === "23505") return jsonResponse({ ok: true, id: "duplicate", action: "skipped" });
+      if (error) return jsonResponse({ ok: false, error: error.message });
+      return jsonResponse({ ok: true, id: data?.id, action: "created" });
+    } catch (err: unknown) {
+      return jsonResponse({ ok: false, error: (err as Error).message });
+    }
+  },
+);
 
 // Tool 5: list_orders
 server.registerTool(
@@ -436,6 +661,47 @@ server.registerTool(
 // TODOS  (new — requires migration 003)
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Tool 9a: gmail_insert_todo
+server.registerTool(
+  "gmail_insert_todo",
+  {
+    title: "Gmail Insert Todo",
+    description: "Insert a todo extracted from Gmail.",
+    inputSchema: {
+      title: z.string(),
+      status: z.string().optional().default("open"),
+      priority: z.string().optional().default("medium"),
+      due_date: z.string().nullable().optional(),
+      project_name: z.string().nullable().optional(),
+      area: z.string().optional().default("personal"),
+      thought_id: z.string().nullable().optional(),
+    },
+  },
+  async ({ title, status, priority, due_date, project_name, area, thought_id }) => {
+    try {
+      const projectId = await lookupProjectId(project_name);
+      const { error } = await supabase.from("todos").insert({
+        title,
+        status,
+        priority,
+        due_date: due_date || null,
+        project_id: projectId,
+        area,
+        thought_id: thought_id || null,
+        metadata: {
+          source: "gmail",
+          project_name: project_name || null,
+        },
+      });
+      if (error?.code === "23505") return jsonResponse({ ok: true, duplicate: true });
+      if (error) return jsonResponse({ ok: false, error: error.message });
+      return jsonResponse({ ok: true });
+    } catch (err: unknown) {
+      return jsonResponse({ ok: false, error: (err as Error).message });
+    }
+  },
+);
+
 // Tool 9: list_todos
 server.registerTool(
   "list_todos",
@@ -639,6 +905,22 @@ server.registerTool(
 // ─── Hono App + Auth ─────────────────────────────────────────────────────────
 
 const app = new Hono();
+
+app.use("*", async (c, next) => {
+  if (!MCP_ACCESS_KEY || c.req.method === "OPTIONS") {
+    await next();
+    return;
+  }
+
+  const auth = c.req.header("authorization") || "";
+  const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
+  const apiKey = c.req.header("x-api-key") || "";
+  if (bearer !== MCP_ACCESS_KEY && apiKey !== MCP_ACCESS_KEY) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  await next();
+});
 
 app.all("*", async (c) => {
   const transport = new StreamableHTTPTransport();

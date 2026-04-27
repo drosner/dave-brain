@@ -17,7 +17,7 @@
  *   deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts [options]
  *
  * Options:
- *   --window=24h|7d|30d|90d|1y|2y|3y|5y|all  Time window (default: all)
+ *   --window=24h|5d|7d|30d|90d|1y|2y|3y|5y|all  Time window (default: all)
  *   --categories=PRIMARY,UPDATES    Gmail categories (default: PRIMARY,UPDATES)
  *   --dry-run                       Classify and show results without storing
  *   --orders-only                   Only extract orders, skip thoughts/todos/people
@@ -25,12 +25,13 @@
  *   --skip=N                        Skip first N messages (resume after crash)
  *   --list-labels                   List Gmail labels and exit
  *
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENROUTER_API_KEY
+ * Requires: OPEN_BRAIN_MCP_KEY, OPENROUTER_API_KEY
  * For Gmail: credentials.json + token.json
  */
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 import { load } from "https://deno.land/std/dotenv/mod.ts";
+import { createOpenBrainMcpClient, McpClient } from "./utils/mcp-client.ts";
 
 // Load .env — works on both Pi and Windows
 const envPath = Deno.build.os === "windows"
@@ -46,10 +47,14 @@ const SYNC_LOG_PATH = `${SCRIPT_DIR}sync-log.json`;
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+let openBrainClient: McpClient | null = null;
+
+function openBrain(): McpClient {
+  openBrainClient ??= createOpenBrainMcpClient();
+  return openBrainClient;
+}
 
 // ─── Sync Log ────────────────────────────────────────────────────────────────
 
@@ -282,6 +287,7 @@ function windowToQuery(window: string): string {
   let after: Date;
   switch (window) {
     case "24h": after = new Date(now.getTime() - 86400000); break;
+    case "5d": after = new Date(now.getTime() - 5 * 86400000); break;
     case "7d": after = new Date(now.getTime() - 7 * 86400000); break;
     case "30d": after = new Date(now.getTime() - 30 * 86400000); break;
     case "90d": after = new Date(now.getTime() - 90 * 86400000); break;
@@ -613,78 +619,25 @@ async function getEmbedding(text: string): Promise<number[]> {
   return (await res.json()).data[0].embedding;
 }
 
-// ─── Supabase Operations ────────────────────────────────────────────────────
-
-async function supabaseQuery(path: string, options: RequestInit = {}): Promise<Response> {
-  return fetch(`${SUPABASE_URL}/rest/v1${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      ...(options.headers as Record<string, string> || {}),
-    },
-  });
-}
-
-let fingerprintSupported: boolean | null = null;
+// ─── Open Brain MCP Operations ──────────────────────────────────────────────
 
 async function insertThought(
   content: string, embedding: number[], metadata: Record<string, unknown>,
 ): Promise<{ ok: boolean; id?: string; duplicate?: boolean; error?: string }> {
   const fingerprint = await contentFingerprint(content);
-  const row: Record<string, unknown> = { content, embedding, metadata };
-  if (fingerprintSupported !== false) row.content_fingerprint = fingerprint;
-
-  const res = await supabaseQuery("/thoughts", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(row),
+  return await openBrain().callTool("gmail_insert_thought", {
+    content,
+    embedding,
+    metadata,
+    content_fingerprint: fingerprint,
   });
-
-  if (res.status === 409) return { ok: true, duplicate: true };
-
-  if (!res.ok && fingerprintSupported === null) {
-    const body = await res.text();
-    if (body.includes("content_fingerprint")) {
-      fingerprintSupported = false;
-      delete row.content_fingerprint;
-      const retry = await supabaseQuery("/thoughts", {
-        method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(row),
-      });
-      if (!retry.ok) return { ok: false, error: `HTTP ${retry.status}: ${await retry.text()}` };
-      const data = await retry.json();
-      return { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id };
-    }
-    return { ok: false, error: `HTTP ${res.status}: ${body}` };
-  }
-
-  if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${await res.text()}` };
-  if (fingerprintSupported === null) fingerprintSupported = true;
-
-  const data = await res.json();
-  return { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id };
-}
-
-// ─── Project Lookup ──────────────────────────────────────────────────────────
-
-async function lookupProjectId(projectName: string | null): Promise<string | null> {
-  if (!projectName) return null;
-  const res = await supabaseQuery(`/projects?name=ilike.${encodeURIComponent(projectName)}&select=id&limit=1`);
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows.length > 0 ? rows[0].id : null;
 }
 
 // ─── People Upsert ───────────────────────────────────────────────────────────
 
 async function upsertPerson(name: string, email: string): Promise<void> {
   if (!email) return;
-  await supabaseQuery("/people", {
-    method: "POST",
-    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
-    body: JSON.stringify({ name: name || email, email, type: "contact" }),
-  });
+  await openBrain().callTool("gmail_upsert_person", { name: name || email, email });
 }
 
 // ─── Todo Insert ─────────────────────────────────────────────────────────────
@@ -697,7 +650,6 @@ async function insertTodo(
   thoughtId: string | null,
   emailDate: string,
 ): Promise<void> {
-  const projectId = await lookupProjectId(projectName);
   const priority = urgency === "high" ? "high" : urgency === "low" ? "low" : "medium";
 
   // Auto-cancel todos from emails older than 30 days — they're historical
@@ -705,27 +657,15 @@ async function insertTodo(
   const thirtyDays = 30 * 24 * 60 * 60 * 1000;
   const status = emailAge > thirtyDays ? "cancelled" : "open";
 
-  const res = await supabaseQuery("/todos", {
-    method: "POST",
-    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
-    body: JSON.stringify({
-      title: task,
-      status,
-      priority,
-      due_date: dueDate || null,
-      project_id: projectId,
-      area: inferArea(projectName),
-      thought_id: thoughtId || null,
-      metadata: {
-        source: "gmail",
-        project_name: projectName || null,
-      },
-    }),
+  await openBrain().callTool("gmail_insert_todo", {
+    title: task,
+    status,
+    priority,
+    due_date: dueDate || null,
+    project_name: projectName || null,
+    area: inferArea(projectName),
+    thought_id: thoughtId || null,
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Todo insert failed: ${body}`);
-  }
 }
 
 // ─── Order Upsert ────────────────────────────────────────────────────────────
@@ -746,24 +686,6 @@ interface OrderData {
   email_type: string;
   category: string;
   project: string | null;
-}
-
-async function findExistingOrder(
-  orderNumber: string | null, vendor: string | null, trackingNumber: string | null,
-): Promise<{ id: string; thought_id: string | null; status: string } | null> {
-  if (orderNumber && vendor) {
-    const res = await supabaseQuery(`/orders?order_number=eq.${encodeURIComponent(orderNumber)}&vendor=ilike.${encodeURIComponent(vendor)}&select=id,thought_id,status`);
-    if (res.ok) { const rows = await res.json(); if (rows.length > 0) return rows[0]; }
-  }
-  if (orderNumber) {
-    const res = await supabaseQuery(`/orders?order_number=eq.${encodeURIComponent(orderNumber)}&select=id,thought_id,status`);
-    if (res.ok) { const rows = await res.json(); if (rows.length > 0) return rows[0]; }
-  }
-  if (trackingNumber) {
-    const res = await supabaseQuery(`/orders?tracking_number=eq.${encodeURIComponent(trackingNumber)}&select=id,thought_id,status`);
-    if (res.ok) { const rows = await res.json(); if (rows.length > 0) return rows[0]; }
-  }
-  return null;
 }
 
 async function upsertOrder(
@@ -801,72 +723,17 @@ async function upsertOrder(
     order.status = "ordered";
   }
 
-  const existing = await findExistingOrder(order.order_number, order.vendor, order.tracking_number);
-
-  if (existing) {
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    const statusRank: Record<string, number> = { ordered: 0, shipped: 1, in_transit: 2, out_for_delivery: 3, delivered: 4, returned: 5, cancelled: 6 };
-    if ((statusRank[order.status] ?? 0) > (statusRank[existing.status] ?? 0)) updates.status = order.status;
-    if (order.tracking_number) {
-      updates.tracking_number = order.tracking_number;
-      if (order.tracking_carrier) updates.tracking_carrier = order.tracking_carrier;
-      if (order.tracking_url) updates.tracking_url = order.tracking_url;
-    }
-    if (order.email_type === "delivery_confirmation" || order.email_type === "carrier_delivery_confirmation") {
-      updates.actual_delivery = order.actual_delivery || emailDate.split("T")[0];
-      updates.status = "delivered";
-    }
-    if (order.estimated_delivery) updates.estimated_delivery = order.estimated_delivery;
-    if (order.amount) updates.amount = order.amount;
-
-    const metaRes = await supabaseQuery(`/orders?id=eq.${existing.id}&select=metadata`);
-    let existingMeta: Record<string, unknown> = {};
-    if (metaRes.ok) { const rows = await metaRes.json(); if (rows.length > 0) existingMeta = rows[0].metadata || {}; }
-    const emailHistory = (existingMeta.email_history as string[] || []);
-    emailHistory.push(`${order.email_type}:${emailId}:${emailDate.split("T")[0]}`);
-    updates.metadata = { ...existingMeta, email_history: emailHistory, last_email_type: order.email_type };
-
-    const res = await supabaseQuery(`/orders?id=eq.${existing.id}`, {
-      method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(updates),
-    });
-    if (!res.ok) return { ok: false, error: `Update failed: ${await res.text()}` };
-    return { ok: true, id: existing.id, action: "updated" };
-  }
-
-  const projectId = await lookupProjectId(order.project);
-  const orderRow: Record<string, unknown> = {
-    item_description: order.item_description || `Package via ${order.vendor || "carrier"}`,
-    vendor: order.vendor,
-    order_number: order.order_number,
-    order_date: emailDate.split("T")[0],
-    estimated_delivery: order.estimated_delivery,
-    actual_delivery: order.actual_delivery,
-    amount: order.amount,
-    currency: order.currency || "USD",
-    status: order.status || "ordered",
-    tracking_number: order.tracking_number,
-    tracking_carrier: order.tracking_carrier,
-    tracking_url: order.tracking_url,
-    category: order.category || "personal",
-    project: order.project,
-    project_id: projectId,
-    source: "gmail",
-    source_email_id: emailId,
-    metadata: { items_list: order.items_list, email_history: [`${order.email_type}:${emailId}:${emailDate.split("T")[0]}`], last_email_type: order.email_type },
-  };
-
-  const res = await supabaseQuery("/orders", {
-    method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(orderRow),
+  return await openBrain().callTool("gmail_upsert_order", {
+    order,
+    email_date: emailDate,
+    email_id: emailId,
   });
-  if (res.status === 409) return { ok: true, id: "duplicate", action: "skipped" };
-  if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${await res.text()}` };
-  const data = await res.json();
-  return { ok: true, id: Array.isArray(data) ? data[0]?.id : data?.id, action: "created" };
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  const startedAt = new Date();
   const args = parseArgs();
   const creds = await loadCredentials();
   const tokenMgr = await createTokenManager(creds);
@@ -896,9 +763,7 @@ async function main() {
   console.log();
 
   if (!args.dryRun) {
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      console.error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required."); Deno.exit(1);
-    }
+    openBrain();
     if (!OPENROUTER_API_KEY) {
       console.error("OPENROUTER_API_KEY required."); Deno.exit(1);
     }
@@ -910,10 +775,36 @@ async function main() {
 
   if (args.skip > 0) console.log(`Fetched ${allRefs.length} total, skipping first ${args.skip}.`);
   console.log(`Processing ${messageRefs.length} messages.\n`);
-  if (messageRefs.length === 0) return;
+  if (messageRefs.length === 0) {
+    const finishedAt = new Date();
+    console.log(JSON.stringify({
+      ok: true,
+      script: "pull-gmail",
+      window: args.window,
+      categories: args.categories,
+      dryRun: args.dryRun,
+      ordersOnly: args.ordersOnly,
+      emailsFetched: 0,
+      alreadyProcessed: 0,
+      classified: 0,
+      noiseSkipped: 0,
+      meaningful: 0,
+      ingested: 0,
+      peopleUpserted: 0,
+      todosCreated: 0,
+      ordersCreated: 0,
+      ordersUpdated: 0,
+      errors: 0,
+      estimatedCost: 0,
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      durationMs: finishedAt.getTime() - startedAt.getTime(),
+    }));
+    return;
+  }
 
   let processed = 0, alreadyDone = 0, noiseSkipped = 0, ingested = 0, errors = 0;
-  let ordersCreated = 0, ordersUpdated = 0, totalWords = 0, classifyCalls = 0;
+  let ordersCreated = 0, ordersUpdated = 0, todosCreated = 0, peopleUpserted = 0, totalWords = 0, classifyCalls = 0;
 
   for (let i = 0; i < messageRefs.length; i++) {
     const ref = messageRefs[i];
@@ -1071,7 +962,9 @@ async function main() {
 
         // ── Upsert contacts into people table ─────────────────────
         for (const contact of [...parseEmailAddresses(from), ...parseEmailAddresses(to), ...parseEmailAddresses(cc)]) {
-          if (contact.email) await upsertPerson(contact.name, contact.email).catch(() => { });
+          if (contact.email) {
+            await upsertPerson(contact.name, contact.email).then(() => peopleUpserted++).catch(() => { });
+          }
         }
 
         // ── Write action items to todos table ─────────────────────
@@ -1087,6 +980,7 @@ async function main() {
                 thoughtResult.id,
                 date,
               );
+              todosCreated++;
               console.log(`   ✅ TODO saved: ${ai.task.slice(0, 60)}`);
             } catch (todoErr) {
               console.error(`   ✅ TODO failed: ${todoErr}`);
@@ -1149,6 +1043,31 @@ async function main() {
   if (errors > 0) {
     console.log(`\n  ⚠️  ${errors} errors. Re-run to retry — processed emails are tracked in sync-log.`);
   }
+
+  const finishedAt = new Date();
+  console.log(JSON.stringify({
+    ok: errors === 0,
+    script: "pull-gmail",
+    window: args.window,
+    categories: args.categories,
+    dryRun: args.dryRun,
+    ordersOnly: args.ordersOnly,
+    emailsFetched: messageRefs.length,
+    alreadyProcessed: alreadyDone,
+    classified: classifyCalls,
+    noiseSkipped,
+    meaningful: processed,
+    ingested: args.dryRun ? 0 : ingested,
+    peopleUpserted: args.dryRun ? 0 : peopleUpserted,
+    todosCreated: args.dryRun ? 0 : todosCreated,
+    ordersCreated: args.dryRun ? 0 : ordersCreated,
+    ordersUpdated: args.dryRun ? 0 : ordersUpdated,
+    errors,
+    estimatedCost: Number(totalCost.toFixed(4)),
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+    durationMs: finishedAt.getTime() - startedAt.getTime(),
+  }));
 }
 
 main().catch((err) => { console.error("Fatal error:", err); Deno.exit(1); });
