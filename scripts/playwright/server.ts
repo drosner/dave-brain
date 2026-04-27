@@ -48,6 +48,7 @@ app.post("/api/cellartracker/export", async (req, res) => {
     outputDir: req.body?.outputDir,
     headless: req.body?.headless,
     includeContent: req.body?.includeContent,
+    syncToWineBrain: req.body?.syncToWineBrain,
   });
 
   return res.status(result.status === "success" ? 200 : 500).json(result);

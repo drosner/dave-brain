@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { Browser, BrowserContext, chromium, Download, Page, Response } from "playwright";
+import { mcpCall } from "../utils/mcp-client.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,9 @@ const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
 const HOME_URL = "https://www.cellartracker.com";
 const LOGIN_URL = "https://www.cellartracker.com/password.asp";
 
+const WINE_BRAIN_MCP_URL = process.env.WINE_BRAIN_MCP_URL || "";
+const WINE_BRAIN_MCP_KEY = process.env.WINE_BRAIN_MCP_KEY || "";
+
 export interface CellarTrackerExportOptions {
   table?: string;
   bottleState?: string;
@@ -37,6 +41,7 @@ export interface CellarTrackerExportOptions {
   timeoutMs?: number;
   includeContent?: boolean;
   parseRows?: boolean;
+  syncToWineBrain?: boolean;
 }
 
 export interface CellarTrackerExportResult {
@@ -52,6 +57,7 @@ export interface CellarTrackerExportResult {
   rows?: Record<string, string>[];
   rowCount?: number;
   source?: "direct-url" | "inventory-ui";
+  wineBrainSync?: { wines_upserted: number; bottles_upserted: number } | { error: string };
 }
 
 interface BrowserSession {
@@ -103,6 +109,13 @@ function sleep(minMs: number, maxMs: number): Promise<void> {
 async function openBrowserSession(headless: boolean): Promise<BrowserSession> {
   if (CHROMIUM_CDP_URL) {
     const browser = await chromium.connectOverCDP(CHROMIUM_CDP_URL);
+    // Prefer an existing context (may have live CellarTracker session/cookies)
+    const existingContexts = browser.contexts();
+    if (existingContexts.length > 0) {
+      const context = existingContexts[0];
+      const page = await context.newPage();
+      return { browser, context, page, owned: false };
+    }
     const context = await buildContext(browser);
     const page = await context.newPage();
     return { browser, context, page, owned: false };
@@ -292,80 +305,58 @@ async function fillBestEffortLoginFields(page: Page): Promise<{ user: boolean; p
   return { user, password };
 }
 
+async function isLoggedIn(page: Page): Promise<boolean> {
+  try {
+    const resp = await page.request.get("https://www.cellartracker.com/xlquery.asp?Format=csv&Table=Inventory&iMax=1");
+    const text = await resp.text();
+    return resp.ok() && !text.includes("not logged into CellarTracker");
+  } catch {
+    return false;
+  }
+}
+
 async function loginToCellarTracker(page: Page, timeoutMs: number): Promise<void> {
-  await page.goto(HOME_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: timeoutMs,
-  });
+  if (await isLoggedIn(page)) {
+    return;
+  }
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
+  // Warm up the browser on CT's home page first (establishes cookies/fingerprint)
+  await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await sleep(1500, 3000);
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+  await page.locator('input[name="szUser"]').waitFor({ timeout: 10000 });
+  await sleep(500, 1000);
 
-  await page.goto(LOGIN_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: timeoutMs,
-  });
+  // Submit via in-page fetch() rather than CDP click — avoids WAF automation detection
+  const loginResult = await page.evaluate(
+    async ({ user, pass, loginUrl }) => {
+      const body = new URLSearchParams();
+      body.set("szUser", user);
+      body.set("szPassword", pass);
+      const res = await fetch(loginUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        credentials: "include",
+        redirect: "follow",
+      });
+      const text = await res.text();
+      return { status: res.status, url: res.url, snippet: text.slice(0, 200) };
+    },
+    { user: CELLARTRACKER_USER, pass: CELLARTRACKER_PASSWORD, loginUrl: LOGIN_URL },
+  );
 
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
-  await page.locator('input, button').first().waitFor({ timeout: 10000 }).catch(() => { });
-
-  const filledUser = await fillFirst(page, [
-    'input[name="szUser"]',
-    'input[name="User"]',
-    'input[name="user"]',
-    'input[type="email"]',
-    "#User",
-    "#Email",
-  ], CELLARTRACKER_USER);
-
-  const filledPassword = await fillFirst(page, [
-    'input[name="szPassword"]',
-    'input[name="Password"]',
-    'input[name="password"]',
-    'input[type="password"]',
-    "#Password",
-  ], CELLARTRACKER_PASSWORD);
-
-  let userOk = filledUser;
-  let passwordOk = filledPassword;
-
-  if (!userOk || !passwordOk) {
-    const fallback = await fillBestEffortLoginFields(page);
-    userOk = userOk || fallback.user;
-    passwordOk = passwordOk || fallback.password;
+  if (loginResult.snippet.includes("not logged into CellarTracker") ||
+    loginResult.snippet.toLowerCase().includes("error") ||
+    loginResult.url.includes("password.asp") ||
+    loginResult.url.includes("search.asp")) {
+    throw new Error(`CellarTracker login fetch failed — url=${loginResult.url} snippet="${loginResult.snippet.slice(0, 100)}"`);
   }
 
-  if (!userOk || !passwordOk) {
-    throw new Error("Could not find CellarTracker login form fields");
-  }
+  await sleep(1000, 2000);
 
-  const navigationPromise = page.waitForNavigation({
-    waitUntil: "networkidle",
-    timeout: timeoutMs,
-  }).catch(() => null);
-
-  const clicked = await clickFirst(page, [
-    'input[name="btnLogin"]',
-    'input[type="submit"]',
-    'button[type="submit"]',
-    'input[value*="Log"]',
-    'input[value*="Sign"]',
-    'button:has-text("Sign in")',
-    'button:has-text("Log in")',
-  ]);
-
-  if (!clicked) {
-    throw new Error("Could not find CellarTracker submit button");
-  }
-
-  await navigationPromise;
-  await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => { });
-
-  const currentUrl = page.url().toLowerCase();
-  const loginStillVisible = await page.locator('input[name="Password"], input[type="password"]').count();
-
-  if (currentUrl.includes("signin") && loginStillVisible > 0) {
-    throw new Error("CellarTracker login did not complete. Check credentials or MFA requirements.");
+  if (!(await isLoggedIn(page))) {
+    throw new Error("CellarTracker login completed but session check failed");
   }
 }
 
@@ -446,13 +437,185 @@ async function triggerExport(
   return { download, response };
 }
 
+// CellarTracker CSV column names vary slightly — try each alias in order.
+function col(row: Record<string, string>, ...keys: string[]): string {
+  for (const k of keys) {
+    if (row[k] !== undefined) return row[k];
+    // case-insensitive fallback
+    const lower = k.toLowerCase();
+    for (const rk of Object.keys(row)) {
+      if (rk.toLowerCase() === lower) return row[rk];
+    }
+  }
+  return "";
+}
+
+function toInt(v: string): number | null {
+  const n = parseInt(v, 10);
+  return isNaN(n) || n === 0 ? null : n;
+}
+
+function toFloat(v: string): number | null {
+  const n = parseFloat(v.replace(/[^0-9.-]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function toDate(v: string): string | null {
+  if (!v) return null;
+  // CellarTracker dates: M/D/YYYY or YYYY-MM-DD
+  const mdy = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return `${mdy[3]}-${String(mdy[1]).padStart(2, "0")}-${String(mdy[2]).padStart(2, "0")}`;
+  const iso = v.match(/^\d{4}-\d{2}-\d{2}$/);
+  if (iso) return v;
+  return null;
+}
+
+interface BottleInput {
+  ct_barcode: string;
+  ct_iwine: number;
+  wine: string;
+  vintage: number | null;
+  producer: string | null;
+  wine_type: string | null;
+  color: string | null;
+  varietal: string | null;
+  master_varietal: string | null;
+  designation: string | null;
+  vineyard: string | null;
+  appellation: string | null;
+  region: string | null;
+  sub_region: string | null;
+  country: string | null;
+  locale: string | null;
+  bottle_size: string | null;
+  drink_from: number | null;
+  drink_to: number | null;
+  location: string | null;
+  bin: string | null;
+  store: string | null;
+  purchase_date: string | null;
+  bottle_cost: number | null;
+  bottle_cost_currency: string | null;
+  bottle_note: string | null;
+  raw_ct_row: Record<string, unknown>;
+}
+
+function mapRowsToBottleInputs(rows: Record<string, string>[]): BottleInput[] {
+  const bottles: BottleInput[] = [];
+  for (const row of rows) {
+    const iWineStr = col(row, "iWine", "iwine");
+    const iWine = parseInt(iWineStr, 10);
+    if (!iWine) continue;
+
+    const barcodeRaw = col(row, "Barcode", "barcode", "WineBarcode");
+    const wine = col(row, "Wine", "wine");
+    const vintage = toInt(col(row, "Vintage", "vintage"));
+    const producer = col(row, "Producer", "producer") || null;
+    const wine_type = col(row, "Type", "wine_type") || null;
+    const color = col(row, "Color", "color") || null;
+    const varietal = col(row, "Varietal", "varietal") || null;
+    const master_varietal = col(row, "MasterVarietal", "master_varietal") || null;
+    const designation = col(row, "Designation", "designation") || null;
+    const vineyard = col(row, "Vineyard", "vineyard") || null;
+    const appellation = col(row, "Appellation", "appellation") || null;
+    const region = col(row, "Region", "region") || null;
+    const sub_region = col(row, "SubRegion", "sub_region") || null;
+    const country = col(row, "Country", "country") || null;
+    const locale = col(row, "Locale", "locale") || null;
+    const bottle_size = col(row, "Size", "size", "BottleSize") || null;
+    const drink_from = toInt(col(row, "BeginConsume", "DrinkFromYear", "DrinkFrom"));
+    const drink_to = toInt(col(row, "EndConsume", "DrinkToYear", "DrinkTo"));
+    const location = col(row, "Location", "location") || null;
+    const bin = col(row, "Bin", "bin") || null;
+    const store = col(row, "StoreName", "store", "Store") || null;
+    const purchase_date = toDate(col(row, "PurchaseDate", "Date", "DateAcquired"));
+    const bottle_cost = toFloat(col(row, "Price", "PricePaid"));
+    const bottle_cost_currency = col(row, "Currency", "currency") || null;
+    const bottle_note = col(row, "BottleNote", "bottle_note") || null;
+
+    // Store the full row as JSONB — preserves valuation, all critic scores, community data
+    const raw_ct_row: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (v !== "") raw_ct_row[k] = v;
+    }
+
+    // CT exports one row per unique wine position; Qty is always 1 in Inventory export.
+    // Use barcode as-is; synthesize only if blank.
+    const ct_barcode = barcodeRaw || `iwine-${iWine}-pos${Object.keys(raw_ct_row).length}`;
+
+    bottles.push({
+      ct_barcode,
+      ct_iwine: iWine,
+      wine,
+      vintage,
+      producer,
+      wine_type,
+      color,
+      varietal,
+      master_varietal,
+      designation,
+      vineyard,
+      appellation,
+      region,
+      sub_region,
+      country,
+      locale,
+      bottle_size,
+      drink_from,
+      drink_to,
+      location,
+      bin,
+      store,
+      purchase_date,
+      bottle_cost,
+      bottle_cost_currency,
+      bottle_note,
+      raw_ct_row,
+    });
+  }
+  return bottles;
+}
+
+async function syncBottlesToWineBrain(
+  rows: Record<string, string>[],
+): Promise<{ wines_upserted: number; bottles_upserted: number } | { error: string }> {
+  if (!WINE_BRAIN_MCP_URL || !WINE_BRAIN_MCP_KEY) {
+    return { error: "WINE_BRAIN_MCP_URL or WINE_BRAIN_MCP_KEY not set — skipping sync" };
+  }
+
+  const bottles = mapRowsToBottleInputs(rows);
+  if (!bottles.length) {
+    return { error: "No valid bottle rows to sync" };
+  }
+
+  // Send in chunks of 500 to stay within MCP payload limits.
+  const CHUNK = 500;
+  let wines_upserted = 0;
+  let bottles_upserted = 0;
+
+  for (let i = 0; i < bottles.length; i += CHUNK) {
+    const chunk = bottles.slice(i, i + CHUNK);
+    const result = await mcpCall(
+      WINE_BRAIN_MCP_URL,
+      WINE_BRAIN_MCP_KEY,
+      "upsert_bottles_batch",
+      { bottles: chunk },
+    ) as { wines_upserted: number; bottles_upserted: number };
+    wines_upserted += result.wines_upserted ?? 0;
+    bottles_upserted += result.bottles_upserted ?? 0;
+  }
+
+  return { wines_upserted, bottles_upserted };
+}
+
 export async function runCellarTrackerExport(
   input: CellarTrackerExportOptions = {},
 ): Promise<CellarTrackerExportResult> {
   requireCredentials();
-  const table = input.table || "Bottles";
-  const bottleState = input.bottleState ?? (table === "Bottles" ? "1" : "");
+  const table = input.table || "Inventory";
+  const bottleState = input.bottleState ?? "";
 
+  const syncToWineBrain = input.syncToWineBrain ?? false;
   const options: Required<CellarTrackerExportOptions> = {
     table,
     bottleState,
@@ -461,7 +624,8 @@ export async function runCellarTrackerExport(
     headless: input.headless ?? true,
     timeoutMs: input.timeoutMs || 120000,
     includeContent: input.includeContent ?? false,
-    parseRows: input.parseRows ?? false,
+    parseRows: input.parseRows ?? syncToWineBrain,
+    syncToWineBrain,
   };
 
   await ensureDir(options.outputDir);
@@ -503,6 +667,10 @@ export async function runCellarTrackerExport(
     }
 
     const stat = await fs.stat(finalPath);
+    const parsed = options.parseRows && data ? parseCsvToObjects(data) : undefined;
+    const wineBrainSync = options.syncToWineBrain && parsed?.rows.length
+      ? await syncBottlesToWineBrain(parsed.rows)
+      : undefined;
 
     return {
       status: "success",
@@ -513,6 +681,10 @@ export async function runCellarTrackerExport(
       table: options.table,
       bytes: stat.size,
       data,
+      columns: parsed?.columns,
+      rows: parsed?.rows,
+      rowCount: parsed?.rows.length,
+      wineBrainSync,
       source: "direct-url",
     };
   } catch (error) {
@@ -550,6 +722,7 @@ export async function runCellarTrackerInventoryExportTest(
     timeoutMs: input.timeoutMs || 120000,
     includeContent: input.includeContent ?? true,
     parseRows: input.parseRows ?? true,
+    syncToWineBrain: false,
   };
 
   await ensureDir(options.outputDir);
@@ -567,7 +740,7 @@ export async function runCellarTrackerInventoryExportTest(
     ownedBrowser = session.owned;
 
     await loginToCellarTracker(page, options.timeoutMs);
-    const { download, response } = await exportFromInventoryUi(page, options);
+    const { download, response } = await triggerExport(page, options);
 
     const suggestedName = download?.suggestedFilename() || "cellartracker-inventory.csv";
     const ext = path.extname(suggestedName) || ".csv";
@@ -630,7 +803,11 @@ export async function runCellarTrackerInventoryExportTest(
 }
 
 if (process.argv[1] === __filename) {
-  runCellarTrackerExport()
+  const cliOptions: CellarTrackerExportOptions = {
+    syncToWineBrain: process.env.SYNC_TO_WINE_BRAIN === "true",
+    includeContent: process.env.INCLUDE_CONTENT === "true",
+  };
+  runCellarTrackerExport(cliOptions)
     .then((result) => {
       console.log(JSON.stringify(result));
       process.exit(result.status === "success" ? 0 : 1);

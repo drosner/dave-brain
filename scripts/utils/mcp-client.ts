@@ -1,3 +1,5 @@
+// ─── Deno MCP client (used by pull-gmail.ts and other Deno scripts) ──────────
+
 interface McpToolContent {
   type: string;
   text?: string;
@@ -80,4 +82,54 @@ export function createOpenBrainMcpClient(): McpClient {
   const accessKey = Deno.env.get("OPEN_BRAIN_MCP_KEY") || Deno.env.get("MCP_ACCESS_KEY") || "";
   if (!accessKey) throw new Error("OPEN_BRAIN_MCP_KEY is required.");
   return new McpClient(endpoint, accessKey);
+}
+
+// ─── Node.js MCP caller (used by scripts/playwright/ via tsx) ────────────────
+
+let _callId = 0;
+
+export async function mcpCall(
+  url: string | undefined,
+  key: string | undefined,
+  tool: string,
+  args: Record<string, unknown> = {},
+): Promise<unknown> {
+  if (!url) throw new Error(`MCP URL is not set (tool: ${tool})`);
+  if (!key) throw new Error(`MCP key is not set (tool: ${tool})`);
+
+  const id = ++_callId;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: tool, arguments: args },
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`MCP HTTP ${res.status} calling ${tool}: ${body}`);
+  }
+
+  const json = await res.json() as {
+    result?: { content?: { type: string; text: string }[] };
+    error?: { message: string };
+  };
+
+  if (json.error) throw new Error(`MCP error calling ${tool}: ${json.error.message}`);
+
+  const text = json.result?.content?.[0]?.text;
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
