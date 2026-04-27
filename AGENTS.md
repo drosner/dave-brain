@@ -33,10 +33,9 @@ Scripts NEVER write to Supabase directly. All data access goes through MCP tool 
 - All scripts output final JSON status to stdout (n8n captures this)
 - All scripts append status entry to scripts/logs/automation-status.json
 
-## Supabase Edge Function Deployment (known issue)
-CLI `supabase functions deploy` silently fails for this project.
-Reliable path: Supabase Dashboard → Edge Functions → [function name] → Edit → paste → Deploy
-Always flag this reminder when touching edge function code.
+## Supabase Edge Function Deployment
+CLI works: `supabase functions deploy <function-name> --project-ref zujvqteqcusephuwuqhe`
+CLI is already authenticated and linked. Docker does not need to be running.
 
 ## Key Pi Paths
 - scripts/ — Deno scripts
