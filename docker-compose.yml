@@ -36,17 +36,17 @@ services:
     container_name: playwright-runner
     restart: unless-stopped
     working_dir: /app
-    command: sh -c "npm install --prefer-offline && npx playwright install --with-deps chromium && npm run start"
-    ports:
-      - "3002:3002"
+    command: sh -c "npm install --prefer-offline && npm run start"
+    network_mode: host
     volumes:
       - /home/drosner/dave-brain/scripts/playwright:/app
       - /home/drosner/dave-brain/scripts/logs:/home/drosner/dave-brain/scripts/logs
       - playwright_runner_modules:/app/node_modules
+    environment:
+      # Connect to Pi's Chromium over CDP — do NOT use bundled browser
+      - CHROMIUM_CDP_URL=http://127.0.0.1:9222
     env_file:
       - /home/drosner/dave-brain/.env
-    networks:
-      - brain
   wine-scanner:
     image: node:20-alpine
     container_name: wine-scanner

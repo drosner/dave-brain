@@ -21,10 +21,7 @@ const DEFAULT_OUTPUT_DIR = process.env.CELLARTRACKER_OUTPUT_DIR ||
 
 const CELLARTRACKER_USER = process.env.CT_USER || process.env.CELLARTRACKER_USER || "";
 const CELLARTRACKER_PASSWORD = process.env.CT_PASSWORD || process.env.CELLARTRACKER_PASSWORD || "";
-// Empty string → let Playwright use its bundled browser (e.g. inside Docker image)
-const CHROMIUM_EXECUTABLE_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH !== undefined
-  ? (process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined)
-  : (process.platform === "win32" ? undefined : "/usr/bin/chromium");
+const CHROMIUM_EXECUTABLE_PATH = process.platform === "win32" ? undefined : "/usr/bin/chromium";
 const CHROMIUM_CDP_URL = process.env.CHROMIUM_CDP_URL || "";
 const DEFAULT_USER_AGENT = process.env.PLAYWRIGHT_USER_AGENT ||
   "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
