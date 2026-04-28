@@ -18,7 +18,7 @@ services:
       # Timezone
       - GENERIC_TIMEZONE=America/New_York
       - TZ=America/New_York
-      - N8N_BLOCL_ENV_ACCESS_IN_NODE=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       # Data path
       - N8N_USER_FOLDER=/home/node/.n8n
     volumes:
