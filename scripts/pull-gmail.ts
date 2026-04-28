@@ -43,6 +43,7 @@ const SCRIPT_DIR = new URL(".", import.meta.url).pathname.replace(/^\/([A-Z]:)/,
 const CREDENTIALS_PATH = Deno.env.get("GMAIL_CREDENTIALS_PATH") || `${SCRIPT_DIR}credentials.json`;
 const TOKEN_PATH = Deno.env.get("GMAIL_TOKEN_PATH") || `${SCRIPT_DIR}token.json`;
 const SYNC_LOG_PATH = `${SCRIPT_DIR}sync-log.json`;
+const AUTOMATION_STATUS_PATH = Deno.env.get("AUTOMATION_STATUS_PATH") || `${SCRIPT_DIR}logs/automation-status.json`;
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
@@ -76,6 +77,26 @@ async function loadSyncLog(): Promise<SyncLog> {
 
 async function saveSyncLog(log: SyncLog): Promise<void> {
   await Deno.writeTextFile(SYNC_LOG_PATH, JSON.stringify(log, null, 2));
+}
+
+async function appendAutomationStatus(entry: Record<string, unknown>): Promise<void> {
+  try {
+    await Deno.mkdir(new URL(".", `file://${AUTOMATION_STATUS_PATH}`).pathname, { recursive: true });
+  } catch {
+    // Directory creation is best-effort; the write below will surface real failures.
+  }
+
+  let existing: unknown[] = [];
+  try {
+    const parsed = JSON.parse(await Deno.readTextFile(AUTOMATION_STATUS_PATH));
+    if (Array.isArray(parsed)) existing = parsed;
+  } catch {
+    existing = [];
+  }
+
+  existing.push(entry);
+  const trimmed = existing.slice(-200);
+  await Deno.writeTextFile(AUTOMATION_STATUS_PATH, JSON.stringify(trimmed, null, 2));
 }
 
 // ─── Content Fingerprint ────────────────────────────────────────────────────
